@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import yaml
@@ -74,6 +76,55 @@ class LifecycleTests(unittest.TestCase):
         report = run_experiment(self.config(), self.output)
         self.assertFalse(report.failed, report.errors)
         return report
+
+    def test_notification_changes_preserve_results_and_reuse(self):
+        self.settings["runs"][0]["repetitions"] = 2
+        original = self.config()
+        self.assertEqual(run_experiment(original, self.output).completed, 2)
+        expected = {spec.run_id: result for spec, result in iter_completed_runs(self.output)}
+        self.settings["notifications"] = {"discord": {"webhook_env": "EWS_TEST_DISCORD"}}
+        enabled = self.config()
+        secret = "https://discord.com/api/webhooks/123/test-secret-not-real"
+        observed = []
+
+        def sent(notifier, message):
+            observed.append((os.getpid(), message))
+
+        with (
+            patch.dict(os.environ, {"EWS_TEST_DISCORD": secret}),
+            patch("experiments_wo_stress.notifications.ExperimentNotifier._send", sent),
+        ):
+            # The new operational setting reuses both existing scientific runs.
+            reused = run_experiment(enabled, self.output, workers=2)
+            self.assertEqual((reused.skipped, reused.failed), (2, 0), reused.errors)
+            self.assertEqual(len(list((self.output / "runs").iterdir())), 2)
+            fresh = self.root / "notified-fresh"
+            report = run_experiment(enabled, fresh, workers=2)
+            self.assertEqual((report.completed, report.failed), (2, 0), report.errors)
+        actual = {spec.run_id: result for spec, result in iter_completed_runs(fresh)}
+        for run_id, result in expected.items():
+            for field in result:
+                np.testing.assert_array_equal(result[field], actual[run_id][field])
+        self.assertEqual({pid for pid, _ in observed}, {os.getpid()})
+        self.assertTrue(any("reused 2" in text for _, text in observed))
+        self.assertTrue(any("completed 2" in text for _, text in observed))
+        for path in fresh.rglob("*"):
+            if path.suffix in {".json", ".yml", ".log"}:
+                self.assertNotIn(secret, path.read_text())
+        self.assertEqual(original.simulation_dict(), enabled.simulation_dict())
+
+    def test_notification_secret_is_only_required_for_enabled_execution(self):
+        self.settings["notifications"] = {"discord": {"webhook_env": "EWS_MISSING_TEST_SECRET"}}
+        config = self.config()
+        from experiments_wo_stress import plan_runs
+
+        self.assertEqual(len(plan_runs(config)), 1)
+        with patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(ValueError, "environment variable is missing"):
+                run_experiment(config, self.output)
+        self.assertFalse(self.output.exists())
+        self.settings["notifications"]["discord"]["enabled"] = False
+        self.assertEqual(self.run_ok().completed, 1)
 
     def test_instance_deduplicates_and_loads_without_simulator(self):
         instance = Instance(metadata={"labels": ["a", "b"]}, arrays={"means": np.array([0.1, 0.9])})

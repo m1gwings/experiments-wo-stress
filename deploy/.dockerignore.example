@@ -1,0 +1,20 @@
+# Copy to .dockerignore in the paper repository. Keep scientific inputs included.
+.git
+.venv
+venv
+__pycache__
+**/__pycache__
+*.py[cod]
+**/*.py[cod]
+.pytest_cache
+.ruff_cache
+.mypy_cache
+build
+dist
+*.egg-info
+outputs
+results
+.env
+.env.*
+*.pem
+*.key

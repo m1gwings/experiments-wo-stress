@@ -25,6 +25,7 @@ import yaml
 from .components import construct, create_instance, resolve_type
 from .config import ExperimentConfig, load_config
 from .jobs import RunSpec, plan_runs
+from .notifications import ExperimentNotifier
 from .rng import make_rngs
 from .storage import (
     EXPERIMENT_SCHEMA_VERSION,
@@ -495,6 +496,7 @@ def run_experiment(
     if source_dir not in sys.path:
         sys.path.insert(0, source_dir)
     specs = plan_runs(config)
+    notifier = ExperimentNotifier(config.notifications, config.name, len(specs))
     sources = _preflight(specs)
     provenance = _provenance(config, sources)
     root = Path(output_dir).resolve()
@@ -510,13 +512,18 @@ def run_experiment(
     try:
         with _experiment_lock(root):
             locations = _prepare(root, config, specs, provenance)
-            if workers == 1:
-                for index, spec in enumerate(specs):
-                    if _STOP_EVENT.is_set():
-                        report.pending = len(specs) - index
-                        break
-                    report.add(
-                        _execute(
+            notifier.start()
+            aborted = True
+            try:
+                if workers == 1:
+                    for index, spec in enumerate(specs):
+                        if _STOP_EVENT.is_set():
+                            report.pending = len(specs) - index
+                            break
+                        notifier.run_started(
+                            spec.run_id, root / "runs" / locations[spec.run_id], spec.budget_steps
+                        )
+                        result = _execute(
                             spec.to_dict(),
                             str(root),
                             execution,
@@ -524,47 +531,60 @@ def run_experiment(
                             max_steps,
                             locations[spec.run_id],
                         )
-                    )
-            else:
-                with ProcessPoolExecutor(
-                    max_workers=workers,
-                    mp_context=context,
-                    initializer=_initialize_worker,
-                    initargs=(_STOP_EVENT,),
-                ) as pool:
-                    remaining = iter(specs)
-                    active = {}
+                        report.add(result)
+                        notifier.run_finished(result)
+                else:
+                    with ProcessPoolExecutor(
+                        max_workers=workers,
+                        mp_context=context,
+                        initializer=_initialize_worker,
+                        initargs=(_STOP_EVENT,),
+                    ) as pool:
+                        remaining = iter(specs)
+                        active = {}
 
-                    def submit() -> bool:
-                        spec = next(remaining, None)
-                        if spec is None:
-                            return False
-                        future = pool.submit(
-                            _execute,
-                            spec.to_dict(),
-                            str(root),
-                            execution,
-                            dict(config.recording),
-                            max_steps,
-                            locations[spec.run_id],
-                        )
-                        active[future] = spec.run_id
-                        return True
+                        def submit() -> bool:
+                            spec = next(remaining, None)
+                            if spec is None:
+                                return False
+                            future = pool.submit(
+                                _execute,
+                                spec.to_dict(),
+                                str(root),
+                                execution,
+                                dict(config.recording),
+                                max_steps,
+                                locations[spec.run_id],
+                            )
+                            active[future] = spec.run_id
+                            notifier.run_started(
+                                spec.run_id,
+                                root / "runs" / locations[spec.run_id],
+                                spec.budget_steps,
+                            )
+                            return True
 
-                    for _ in range(min(workers, len(specs))):
-                        submit()
-                    while active:
-                        done, _ = wait(active, return_when=FIRST_COMPLETED)
-                        for future in done:
-                            run_id = active.pop(future)
-                            try:
-                                report.add(future.result())
-                            except Exception as exc:
-                                report.add((run_id, "failed", f"Worker failure: {exc}"))
-                                _STOP_EVENT.set()
-                            if not _STOP_EVENT.is_set():
-                                submit()
-                    report.pending = sum(1 for _ in remaining)
+                        for _ in range(min(workers, len(specs))):
+                            submit()
+                        while active:
+                            done, _ = wait(active, return_when=FIRST_COMPLETED)
+                            for future in done:
+                                run_id = active.pop(future)
+                                try:
+                                    result = future.result()
+                                    report.add(result)
+                                    notifier.run_finished(result)
+                                except Exception as exc:
+                                    result = (run_id, "failed", f"Worker failure: {exc}")
+                                    report.add(result)
+                                    notifier.run_finished(result)
+                                    _STOP_EVENT.set()
+                                if not _STOP_EVENT.is_set():
+                                    submit()
+                        report.pending = sum(1 for _ in remaining)
+                aborted = False
+            finally:
+                notifier.finish(report.to_dict(), aborted=aborted)
     finally:
         for signum, handler in previous_handlers.items():
             signal.signal(signum, handler)

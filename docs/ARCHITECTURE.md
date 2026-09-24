@@ -210,6 +210,20 @@ Analysis does not construct algorithms or generators. PDF and JPG export uses
 optional Matplotlib. TikZ/PGFPlots export produces editable source without requiring
 LaTeX. Custom metrics and plotters use their own explicitly imported code.
 
+## Optional operational notifications
+
+Discord delivery belongs to the coordinator, outside the scientific step loop and
+worker processes. An optional daemon thread sends start, periodic, and final
+run-stage summaries. It takes small counter snapshots under a lock and reads only
+bounded progress metadata for a few active runs. No trajectory validation or data
+upload is needed to report checkpoint coverage.
+
+A webhook URL is resolved from an environment variable only when execution is
+requested. Settings are operational and do not enter scientific identities or RNG
+streams. HTTP errors, rate limits, and delayed delivery cannot fail a simulation;
+shutdown waits only for a bounded interval. Notifications are best effort and are
+not a durable monitoring service. The configuration guide defines their scope.
+
 ## Operations and limits
 
 `ews build` performs execution and requested analysis in one command; `run`,
@@ -223,6 +237,12 @@ See [the configuration guide](CONFIGURATION.md) for commands and settings.
 Artifact schema 2 implements instances, retained variants, and budget continuation.
 Legacy schema 1 artifacts remain readable for supported analysis; execution uses
 a new output directory. There is no silent in-place conversion or deletion.
+
+A container on one cloud VM can use the same executor and a durable local/block
+filesystem. The current artifact contract needs atomic replacement and process
+locking; object storage is suitable for backups, not a direct output-directory
+replacement. Provenance includes platform and resolved input paths, so a container
+alone does not guarantee resume compatibility across hosts. See [CLOUD.md](CLOUD.md).
 
 The API is experimental. Distributed scheduling, arbitrary mid-function recovery,
 generic object serialization, and arbitrary plotting primitives are outside scope.

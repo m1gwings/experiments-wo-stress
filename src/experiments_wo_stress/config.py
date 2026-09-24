@@ -13,6 +13,7 @@ from typing import Any
 import yaml
 
 from .jobs import ComponentSpec, RunSpec, canonical_json
+from .notifications import validate_notifications
 
 __all__ = ["ComponentSpec", "ExperimentConfig", "RunSpec", "load_config"]
 
@@ -41,6 +42,7 @@ class ExperimentConfig:
     recording: dict[str, Any] = field(default_factory=lambda: dict(_RECORDING))
     analysis: dict[str, Any] = field(default_factory=dict)
     source_dir: Path = field(default_factory=Path.cwd)
+    notifications: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
         return copy.deepcopy(
@@ -51,6 +53,7 @@ class ExperimentConfig:
                 "execution": self.execution,
                 "recording": self.recording,
                 "analysis": self.analysis,
+                "notifications": self.notifications,
             }
         )
 
@@ -247,7 +250,11 @@ def load_config(path: str | Path) -> ExperimentConfig:
     except yaml.YAMLError as exc:
         raise ValueError(f"Invalid YAML in {path}: {exc}") from exc
     raw = _mapping(raw, "experiment")
-    _keys(raw, {"name", "seed", "runs", "execution", "recording", "analysis"}, "experiment")
+    _keys(
+        raw,
+        {"name", "seed", "runs", "execution", "recording", "analysis", "notifications"},
+        "experiment",
+    )
     _json_value(raw, "experiment")
     name = _text(raw.get("name"), "name")
     seed = _integer(raw.get("seed", 0), "seed")
@@ -300,7 +307,10 @@ def load_config(path: str | Path) -> ExperimentConfig:
 
     analysis = _mapping(raw.get("analysis", {}), "analysis")
     _keys(analysis, {"metrics", "aggregator", "figures"}, "analysis")
-    config = ExperimentConfig(name, seed, groups, execution, recording, analysis, path.parent)
+    notifications = validate_notifications(raw.get("notifications", {}))
+    config = ExperimentConfig(
+        name, seed, groups, execution, recording, analysis, path.parent, notifications
+    )
     source = str(path.parent)
     if source not in sys.path:
         sys.path.insert(0, source)

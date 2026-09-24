@@ -16,7 +16,7 @@ from urllib.parse import unquote, urlsplit
 
 LINK = re.compile(r"!?\[[^\]]*\]\(([^)]+)\)")
 FENCE = re.compile(r"^\s{0,3}(`{3,}|~{3,})")
-REPO_PATH = re.compile(r"(?<![\w./])(?:src|docs|examples|tests|scripts|\.github)/[\w./*-]+")
+REPO_PATH = re.compile(r"(?<![\w./])(?:src|docs|examples|tests|scripts|deploy|\.github)/[\w./*-]+")
 COMMAND = re.compile(r"\bews\s+([a-z][a-z-]*)\b")
 
 

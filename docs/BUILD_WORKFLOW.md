@@ -44,6 +44,20 @@ on their actual risks; avoid tests that merely repeat implementation details.
 Execution verification compares fresh runs with pause/resume, process interruption,
 changed worker counts, and compatible budget extension. Storage verification covers
 commit boundaries, corrupt artifacts, retained variants, and cleanup scope.
+Notification tests use a mocked transport: no real Discord messages are sent. Verify
+periodic delivery during long runs, bounded shutdown, secret redaction, and unchanged
+scientific identities. The standalone LLM guide has executable copy-and-run examples.
+The separate container CI job builds the deployment template from the current
+public Git revision, then checks non-root execution, two-worker pause/resume,
+artifact inspection, TikZ generation, and reuse on a persistent mount. To run it
+locally with Docker and pip-tools installed, use a published library commit:
+
+```bash
+python scripts/check_container.py --revision FULL_40_CHARACTER_GIT_COMMIT
+```
+
+Python-only checks do not establish that a container image was built successfully.
+
 Analysis verification checks saved-instance access, complete-trajectory requirements,
 cache hits and invalidation, statistical grouping, and figure regeneration without
 simulation imports.

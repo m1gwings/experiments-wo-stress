@@ -25,6 +25,7 @@ workflow; the public API still needs validation in a real paper project.
 - Metrics computed from observations and instances, cached aggregation, and PDF,
   JPG, and editable TikZ/PGFPlots figures.
 - Reusable bandit settings and an optional Gymnasium adapter.
+- Container deployment guidance and optional Discord progress notifications.
 
 ## Install
 
@@ -73,6 +74,35 @@ artifacts. The active request tells analysis which results to use.
 The [CSV example](examples/offline_csv/README.md) demonstrates the same generator
 interface with a stored dataset and an offline estimator.
 
+## Standalone projects, cloud runs, and LLM assistance
+
+Keep paper algorithms, custom metrics, and YAML in a separate repository and install
+this library at a pinned Git commit. A single Linux VM with a container and a
+persistent disk fits the existing process-worker design. The [cloud guide](docs/CLOUD.md)
+includes a Docker template, resource sizing, checkpoint recovery, and current
+provider tradeoffs. Moving checkpoints between different environments is not
+necessarily compatible; start cloud runs in the environment you will resume.
+
+For assisted implementation, upload [the standalone LLM guide](docs/LLM_GUIDE.md)
+alongside the paper PDF. It contains the public extension contracts, a complete
+copyable study, YAML and CLI entry points, and scientific validation instructions.
+It is intended to be useful without uploading the rest of this repository.
+
+To receive Discord summaries during the execution stage:
+
+```yaml
+notifications:
+  discord:
+    webhook_env: EWS_DISCORD_WEBHOOK_URL
+    interval_seconds: 300
+```
+
+Set that environment variable through your shell or cloud secret store; keep the
+webhook URL out of the repository. Updates report run counts and the latest durable
+checkpoints. Network failures do not fail runs. Notifications are optional and do
+not change scientific identities or random streams. See the
+[configuration guide](docs/CONFIGURATION.md#discord-notifications) for delivery limits.
+
 ## Python API
 
 ```python
@@ -114,6 +144,8 @@ actions or rewards. Checkpoints occur between protocol steps, so a single long
 
 ## Documentation and development
 
+- [Standalone guide for LLM-assisted experiments](docs/LLM_GUIDE.md)
+- [Cloud execution and container template](docs/CLOUD.md)
 - [Configuration and extension guide](docs/CONFIGURATION.md)
 - [Architecture and artifact contracts](docs/ARCHITECTURE.md)
 - [Project goals](docs/PROJECT_BRIEF.md)

@@ -17,15 +17,18 @@ contract, with real-paper validation still needed before declaring it stable.
   - `components.py`, `protocols.py`, `data.py`: extension contracts and built-in helpers.
   - `artifacts.py`, `settings.py`: saved instances/results and reusable environments.
   - `runner.py`, `storage.py`: local execution, buffering, checkpoints, recovery.
-  - `logging.py`, `cleanup.py`: rotating diagnostics and previewable artifact cleanup.
+  - `logging.py`, `notifications.py`, `cleanup.py`: diagnostics, Discord summaries, cleanup.
   - `metrics.py`, `analysis.py`, `plotting.py`: analysis independent of simulation.
 - `examples/sequential_study/`: repeated Gaussian bandit study with custom components.
 - `examples/offline_csv/`: stored-data example.
 - `tests/`: configuration, execution, persistence, analysis, and CLI checks.
 - `docs/ARCHITECTURE.md`: component boundaries, reproducibility, and artifact contract.
 - `docs/CONFIGURATION.md`: configuration reference and extension guide.
+- `docs/LLM_GUIDE.md`: self-contained public authoring contract for use with a paper PDF.
+- `docs/CLOUD.md`, `deploy/`: single-host cloud guidance and standalone-project templates.
 - `docs/PROJECT_BRIEF.md`, `docs/BUILD_WORKFLOW.md`: goals and development process.
 - `scripts/check_docs.py`: mechanical checks for documentation and examples.
+- `scripts/check_container.py`: standalone-container integration check, run by CI.
 
 ## Working rules
 
@@ -58,6 +61,9 @@ contract, with real-paper validation still needed before declaring it stable.
   in the README, architecture/configuration docs, examples, and contributor guidance
   when behavior or a public contract changes. Surface material design choices
   rather than silently changing seed, resume, or statistical semantics.
+- Keep `docs/LLM_GUIDE.md` self-contained and current whenever public entry points,
+  YAML, CLI commands, or component contracts change. Its runnable example must
+  remain valid without access to the other documentation.
 - After changing a file or a tightly related batch, run
   `python scripts/check_docs.py` and review affected prose against the actual code.
   Before delivery, also run its `--examples --cli` checks. The script checks links,
@@ -66,6 +72,9 @@ contract, with real-paper validation still needed before declaring it stable.
 - Verify behaviors that carry risk: deterministic streams, interruption/resumption,
   completed-output validation, mismatches, and figure regeneration. Prefer focused
   tests over tests that duplicate implementation details.
+- Keep notification transport outside workers and protocol steps. Notifications
+  must not change scientific identities or expose webhook credentials in artifacts
+  or errors; test delivery with mocked transports rather than real messages.
 - Keep generated results, caches, environments, and build artifacts out of commits.
   Do not choose a license or publish a release without an explicit request.
 

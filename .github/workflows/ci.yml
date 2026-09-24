@@ -36,3 +36,18 @@ jobs:
       - name: Build distributions
         if: matrix.python-version == '3.12'
         run: python -m build --no-isolation
+
+  container:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: Install lockfile tooling
+        run: python -m pip install pip-tools
+      - name: Build and test standalone study container
+        env:
+          EWS_TEST_REVISION: ${{ github.sha }}
+        run: python scripts/check_container.py --revision "$EWS_TEST_REVISION"

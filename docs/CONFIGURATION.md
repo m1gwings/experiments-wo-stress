@@ -122,6 +122,51 @@ A different recording selection retains a separate variant. It may require new
 execution to obtain missing observations. Metrics that need every action or reward
 reject sparse trajectories; the library does not infer omitted data.
 
+## Discord notifications
+
+Notifications are disabled unless a Discord block is configured and enabled:
+
+```yaml
+notifications:
+  discord:
+    enabled: true
+    webhook_env: EWS_DISCORD_WEBHOOK_URL
+    interval_seconds: 300
+    timeout_seconds: 5
+```
+
+These are the defaults when the block is present. Supply the URL using the named
+environment variable or a cloud secret; `webhook_env` contains the variable's name,
+not its value. Only Discord HTTPS webhook endpoints are accepted. A webhook for an
+existing forum thread can include `thread_id` in its URL. A missing or invalid URL
+is a configuration error before execution; setting `enabled: false` requires no
+secret. `plan`, `analyze`, and `plot` do not resolve the variable or send messages.
+
+The coordinator sends a start message, periodic summaries, and attempts a final
+summary for the **run stage** of `run` or `build`. The final message distinguishes
+completed, paused, failed, and aborted execution. It does not claim that a later
+analysis or figure stage in `build` succeeded. Summaries contain the experiment
+name, elapsed time, run counts, and up to four active run identifiers with their
+latest durable checkpoint step. Those counters can lag live execution; an offline
+fit without intermediate checkpoints still receives periodic count updates.
+
+One background sender reads bounded progress metadata for active runs only. No
+worker sends requests, and no protocol step performs notification work. Network
+errors leave scientific execution unaffected. Discord retry windows are respected;
+an unavailable or unauthorized webhook disables delivery for that invocation.
+Updates are best effort, without a durable delivery queue. A final message may be
+omitted during an outage, a rate limit, forced termination, or the bounded shutdown
+wait. The socket timeout is positive and at most 30 seconds; the update interval
+is at least one second. Shutdown waits at most twice the timeout plus 0.25 seconds,
+capped at 60 seconds. Prefer intervals of several minutes.
+
+The resolved configuration stores only the environment variable name. Notification
+settings are excluded from run identities and RNG streams. Payloads contain no
+parameter values, paths, trajectories, exception text, or attachments; mention
+parsing is disabled. Set up the desired Discord channel's incoming webhook and keep
+its URL in your secret store. See the official [webhook API](https://docs.discord.com/developers/resources/webhook#execute-webhook)
+and [rate-limit behavior](https://docs.discord.com/developers/topics/rate-limits).
+
 ## Budget continuation and retained artifacts
 
 A component declares `supports_extension = True` only when its saved state can
@@ -393,3 +438,10 @@ configurations, and generated outputs in distinct locations so cleanup scope is
 clear. Execution and cleanup share a lock; analysis and plotting do not, so clean
 artifacts while those operations are idle. See [the architecture](ARCHITECTURE.md)
 for recovery and artifact boundaries.
+
+## Standalone authoring and deployment
+
+The [LLM guide](LLM_GUIDE.md) is a self-contained document for generating a paper's
+experiment repository from these interfaces. The [cloud guide](CLOUD.md) shows how
+to install a pinned library revision in a container and keep output on durable
+storage, with no distributed scheduler or storage-backend change.
