@@ -1,3 +1,4 @@
+# syntax=docker/dockerfile:1
 # Copy this file to Dockerfile in the paper's standalone repository.
 # Build context: that repository, containing experiment.yml, paper/, and requirements.lock.
 # Pin PYTHON_IMAGE to a digest for a repeatable deployment; keep the same architecture.
@@ -11,8 +12,17 @@ RUN apt-get update \
 COPY requirements.lock /tmp/requirements.lock
 # The lock includes runtime dependencies and the setuptools/wheel build dependencies.
 RUN python -m pip install --no-cache-dir --require-hashes -r /tmp/requirements.lock
-RUN python -c 'import re, sys; assert re.fullmatch(r"[0-9a-f]{40}", sys.argv[1]), "EWS_REV must be a full Git commit hash"' "${EWS_REV}" \
-    && python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
+# Optional github_token authenticates private repository access without entering layers.
+RUN --mount=type=secret,id=github_token \
+    --mount=type=tmpfs,target=/run/ews-git \
+    printf '%s\n' '#!/bin/sh' 'case "$1" in' \
+        '  *Username*) printf "%s\n" "x-access-token" ;;' \
+        '  *Password*) cat /run/secrets/github_token ;;' \
+        'esac' > /run/ews-git/askpass \
+    && chmod 700 /run/ews-git/askpass \
+    && python -c 'import re, sys; assert re.fullmatch(r"[0-9a-f]{40}", sys.argv[1]), "EWS_REV must be a full Git commit hash"' "${EWS_REV}" \
+    && GIT_ASKPASS=/run/ews-git/askpass GIT_TERMINAL_PROMPT=0 \
+        python -m pip wheel --no-cache-dir --no-deps --no-build-isolation \
         --wheel-dir /wheels \
         "experiments-wo-stress @ git+https://github.com/m1gwings/experiments-wo-stress.git@${EWS_REV}"
 

@@ -48,13 +48,18 @@ Notification tests use a mocked transport: no real Discord messages are sent. Ve
 periodic delivery during long runs, bounded shutdown, secret redaction, and unchanged
 scientific identities. The standalone LLM guide has executable copy-and-run examples.
 The separate container CI job builds the deployment template from the current
-public Git revision, then checks non-root execution, two-worker pause/resume,
+Git revision, then checks non-root execution, two-worker pause/resume,
 artifact inspection, TikZ generation, and reuse on a persistent mount. To run it
-locally with Docker and pip-tools installed, use a published library commit:
+locally with Docker and pip-tools installed, use an accessible library commit:
 
 ```bash
 python scripts/check_container.py --revision FULL_40_CHARACTER_GIT_COMMIT
 ```
+
+For a private library revision, supply a repository-read token through an
+environment variable and add `--github-token-env EWS_BUILD_GITHUB_TOKEN`; the
+helper forwards it as a temporary BuildKit secret. CI uses its read-only repository
+token. Never put the token value in command arguments or the image.
 
 Python-only checks do not establish that a container image was built successfully.
 

@@ -2,7 +2,7 @@
 """Build the standalone-study Docker example and verify durable pause/resume/reuse.
 
 Requires Docker, pip-tools, Python 3.12, and a non-root Linux account. Downloads
-the supplied public Git revision and dependencies; provisions no cloud resources.
+the supplied accessible Git revision and dependencies; provisions no cloud resources.
 """
 
 from __future__ import annotations
@@ -59,12 +59,24 @@ def run(command: list[str], *, cwd: Path | None = None, report: bool = False):
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--revision", required=True, help="Public full 40-character library SHA")
+    parser.add_argument(
+        "--revision", required=True, help="Accessible full 40-character library SHA"
+    )
+    parser.add_argument(
+        "--github-token-env", help="Environment variable holding a repository-read GitHub token"
+    )
     args = parser.parse_args()
     if not re.fullmatch(r"[0-9a-f]{40}", args.revision):
         parser.error("--revision must be a full 40-character lowercase Git commit hash")
     if os.name != "posix" or os.getuid() == 0 or shutil.which("docker") is None:
         parser.error("run as a non-root Linux account with Docker available")
+    build_secrets = []
+    if args.github_token_env:
+        if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", args.github_token_env):
+            parser.error("--github-token-env must name an environment variable")
+        if not os.environ.get(args.github_token_env):
+            parser.error("the environment variable named by --github-token-env is missing or empty")
+        build_secrets = ["--secret", f"id=github_token,env={args.github_token_env}"]
     root = Path(__file__).resolve().parents[1]
     name = "ews-smoke-" + uuid.uuid4().hex[:12]
     image = name + ":test"
@@ -102,6 +114,7 @@ def main() -> int:
                 [
                     "docker",
                     "build",
+                    *build_secrets,
                     "--build-arg",
                     f"EWS_REV={args.revision}",
                     "--build-arg",

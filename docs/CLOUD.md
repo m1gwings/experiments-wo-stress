@@ -99,8 +99,14 @@ paper repository. The build context is the **paper repository**, not this librar
 checkout. The Dockerfile builds the library wheel from the pinned commit and copies
 the study code into the final image.
 
+The library repository is currently private. Make a GitHub token with read access
+available as `EWS_GITHUB_TOKEN` in your local environment or CI secret store. The
+build passes it as a temporary BuildKit secret, never as an image build argument.
+If the repository becomes public, omit the `--secret` line:
+
 ```bash
 docker build \
+  --secret id=github_token,env=EWS_GITHUB_TOKEN \
   --build-arg EWS_REV="$(cat .ews-revision)" \
   --build-arg STUDY_REV="$(git rev-parse HEAD)" \
   --tag paper-study:locked .
@@ -112,10 +118,12 @@ its registry digest together with the lock and study commit. The default tag in 
 example is convenient for a first build; a tag alone does not freeze the base image.
 The final image does not need a copy of the library's Git repository.
 
-The example installs the public library over HTTPS and copies an already checked-out
-paper repository into the image, so neither step needs repository credentials in
-the runtime container. If you adapt the build for private dependencies, use Docker
-build secrets or SSH mounts rather than embedding tokens in URLs, `ARG`, or `ENV`.
+The example fetches the library over HTTPS and copies an already checked-out paper
+repository into the image. For private library access, Git's temporary askpass
+script reads the mounted secret; neither it nor the token enters the resulting
+image. The runtime container needs no GitHub credentials. Use build secrets or SSH
+mounts for other private dependencies rather than embedding tokens in URLs, `ARG`,
+or `ENV`.
 [Docker build secrets](https://docs.docker.com/build/building/secrets/)
 
 The repository's container CI job builds this template against a temporary

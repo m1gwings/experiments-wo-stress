@@ -159,6 +159,11 @@ class NotificationConfigurationTests(_NotificationTest):
                 self.assertNotIn("fictional_test_secret", str(caught.exception))
         self.build_opener.assert_not_called()
 
+    def test_empty_query_is_not_passed_to_strict_parser(self):
+        with mock.patch("experiments_wo_stress.notifications.urllib.parse.parse_qs") as parse:
+            self.assertEqual(_webhook_url(_URL), _URL + "?wait=true")
+            parse.assert_not_called()
+
     def test_webhook_wait_confirmation_and_thread_query(self):
         self.assertEqual(_webhook_url(_URL), _URL + "?wait=true")
         url = _webhook_url(_URL + "?wait=false&thread_id=123456")

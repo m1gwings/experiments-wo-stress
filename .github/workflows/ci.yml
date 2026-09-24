@@ -50,4 +50,7 @@ jobs:
       - name: Build and test standalone study container
         env:
           EWS_TEST_REVISION: ${{ github.sha }}
-        run: python scripts/check_container.py --revision "$EWS_TEST_REVISION"
+          EWS_BUILD_GITHUB_TOKEN: ${{ github.token }}
+        run: >-
+          python scripts/check_container.py --revision "$EWS_TEST_REVISION"
+          --github-token-env EWS_BUILD_GITHUB_TOKEN

@@ -42,6 +42,13 @@ python -m pip install "experiments-wo-stress @ git+https://github.com/m1gwings/e
 python -m pip freeze > requirements.lock.txt
 ```
 
+If the library repository requires authentication, configure Git access before
+installing (for example, authenticate the GitHub CLI and run `gh auth setup-git`).
+Use a credential helper or an SSH identity with read access. Never put a GitHub
+access token in the requirement URL, source files, or lockfile, and never ask the
+LLM to receive the secret. Container builds can use a BuildKit secret for the Git
+fetch; the runtime image needs no GitHub credentials.
+
 On Windows, activate with `.venv\Scripts\activate`. NumPy and PyYAML are core
 dependencies. For PDF/JPG, change the requirement to
 `experiments-wo-stress[plot] @ git+...`; for Gymnasium, add the `gym` extra.

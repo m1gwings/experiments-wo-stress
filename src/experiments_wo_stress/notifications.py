@@ -64,7 +64,8 @@ def _webhook_url(value: str) -> str:
     """Accept Discord HTTPS endpoints, without permitting redirects or arbitrary hosts."""
     try:
         parsed = urllib.parse.urlsplit(value)
-        query = urllib.parse.parse_qs(parsed.query, strict_parsing=True)
+        # Python 3.10 treats an empty string as a malformed strict query.
+        query = urllib.parse.parse_qs(parsed.query, strict_parsing=True) if parsed.query else {}
         valid = (
             parsed.scheme == "https"
             and parsed.hostname
