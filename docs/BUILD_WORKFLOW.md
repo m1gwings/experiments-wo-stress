@@ -58,8 +58,9 @@ python scripts/check_container.py --revision FULL_40_CHARACTER_GIT_COMMIT
 
 For a private library revision, supply a repository-read token through an
 environment variable and add `--github-token-env EWS_BUILD_GITHUB_TOKEN`; the
-helper forwards it as a temporary BuildKit secret. CI uses its read-only repository
-token. Never put the token value in command arguments or the image.
+helper forwards it as a temporary BuildKit secret. The public repository's CI
+tests the build without credentials. Never put the token value in command arguments
+or the image.
 
 Python-only checks do not establish that a container image was built successfully.
 

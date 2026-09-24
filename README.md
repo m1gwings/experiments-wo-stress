@@ -29,7 +29,18 @@ workflow; the public API still needs validation in a real paper project.
 
 ## Install
 
-Python 3.10 or newer is required. From this checkout:
+Python 3.10 or newer is required. The package is currently distributed from its
+public GitHub repository; there is no package-index release. In a separate study
+repository, install it directly from Git:
+
+```bash
+python -m pip install 'experiments-wo-stress[plot] @ git+https://github.com/m1gwings/experiments-wo-stress.git@main'
+```
+
+Replace `main` with a full commit hash for a reproducible study. Git must be
+available during installation. The package name uses hyphens; Python imports use
+underscores (`import experiments_wo_stress`). Installation also provides the `ews`
+command. From a local checkout, use an editable installation instead:
 
 ```bash
 python -m venv .venv
