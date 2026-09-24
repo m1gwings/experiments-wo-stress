@@ -22,6 +22,7 @@ classifiers = [
 
 [project.optional-dependencies]
 plot = ["matplotlib>=3.7"]
+gym = ["gymnasium>=1.0"]
 dev = ["pytest>=8", "ruff>=0.9", "build>=1.2", "setuptools>=68", "wheel>=0.41"]
 
 [project.scripts]

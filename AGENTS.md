@@ -15,7 +15,9 @@ contract, with real-paper validation still needed before declaring it stable.
 - `src/experiments_wo_stress/`: package and `ews` CLI.
   - `config.py`, `jobs.py`, `rng.py`: validated YAML, run planning, stable random streams.
   - `components.py`, `protocols.py`, `data.py`: extension contracts and built-in helpers.
+  - `artifacts.py`, `settings.py`: saved instances/results and reusable environments.
   - `runner.py`, `storage.py`: local execution, buffering, checkpoints, recovery.
+  - `logging.py`, `cleanup.py`: rotating diagnostics and previewable artifact cleanup.
   - `metrics.py`, `analysis.py`, `plotting.py`: analysis independent of simulation.
 - `examples/sequential_study/`: repeated Gaussian bandit study with custom components.
 - `examples/offline_csv/`: stored-data example.
@@ -23,6 +25,7 @@ contract, with real-paper validation still needed before declaring it stable.
 - `docs/ARCHITECTURE.md`: component boundaries, reproducibility, and artifact contract.
 - `docs/CONFIGURATION.md`: configuration reference and extension guide.
 - `docs/PROJECT_BRIEF.md`, `docs/BUILD_WORKFLOW.md`: goals and development process.
+- `scripts/check_docs.py`: mechanical checks for documentation and examples.
 
 ## Working rules
 
@@ -30,19 +33,36 @@ contract, with real-paper validation still needed before declaring it stable.
   or a particular research package.
 - Keep environment state in `DataGenerator`, algorithm state in the algorithm,
   and interaction order/progress in the protocol. Each run gets fresh instances.
+- Persist generated instances separately from evolving state. Keep scientific
+  metrics in analysis code, computed from recorded observations and the saved
+  instance. Do not hide metric accumulators in the data generator.
 - Inject separate RNGs; do not use global randomness. Seeds and run identities
   must remain independent of worker count, scheduling, and grid traversal order.
 - Checkpoint only at complete protocol steps. Preserve RNG state and result
   boundaries together; never accept a partial artifact as a completed run.
-- Reject incompatible scientific settings, code, or tracked input files explicitly.
-  Preserve recovery from a preceding valid checkpoint and avoid duplicate records.
+- Never silently mix incompatible scientific settings, code, or tracked inputs.
+  Select matching retained variants and report damaged artifacts. Preserve recovery
+  from a preceding valid checkpoint and avoid duplicate records.
+- Treat run budget and recording selection as explicit execution requests. Extend
+  a completed run only when all involved components support continuation; retain
+  distinct recording variants and identify the selected variant in metadata.
 - Keep stored numerical results separate from figures. Analysis must work without
   importing simulation components; custom metrics/plotters may import their own code.
 - Keep memory and dependencies proportionate. Buffering is per active run, and
   analysis retains one run plus grouped summaries. Distributed execution is outside scope.
-- Update the architecture/configuration documentation when an authorized change
-  changes the public contract. Surface material design choices rather than silently
-  changing seed, resume, or statistical semantics.
+- Deliver professional-quality code for every implementation task: clear names,
+  focused responsibilities, useful errors, complete docstrings at public boundaries,
+  consistent formatting, and proportionate verification. Remove stale comments,
+  dead code, and scaffolding introduced by the change.
+- Keep documentation part of the implementation. Update every affected reference
+  in the README, architecture/configuration docs, examples, and contributor guidance
+  when behavior or a public contract changes. Surface material design choices
+  rather than silently changing seed, resume, or statistical semantics.
+- After changing a file or a tightly related batch, run
+  `python scripts/check_docs.py` and review affected prose against the actual code.
+  Before delivery, also run its `--examples --cli` checks. The script checks links,
+  fences, repository paths, YAML planning, and command availability; it does not
+  replace review of scientific claims or API semantics.
 - Verify behaviors that carry risk: deterministic streams, interruption/resumption,
   completed-output validation, mismatches, and figure regeneration. Prefer focused
   tests over tests that duplicate implementation details.
@@ -54,8 +74,9 @@ contract, with real-paper validation still needed before declaring it stable.
 ```bash
 python -m pip install -e '.[dev,plot]'
 python -m pytest
-ruff check src tests examples
-ruff format --check src tests examples
+python scripts/check_docs.py --examples --cli
+ruff check src tests examples scripts
+ruff format --check src tests examples scripts
 python -m build --no-isolation
 ```
 

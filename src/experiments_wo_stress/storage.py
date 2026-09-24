@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import time
 import uuid
 from collections.abc import Iterator, Mapping
@@ -15,6 +16,7 @@ from typing import Any
 import numpy as np
 
 SCHEMA_VERSION = 1
+EXPERIMENT_SCHEMA_VERSION = 2
 
 
 class StorageError(RuntimeError):
@@ -197,6 +199,25 @@ class RunStore:
         if self.progress.get("schema_version") != SCHEMA_VERSION:
             raise StorageError(f"Unsupported run schema in {self.progress_path}")
 
+    def completion(
+        self, target: int | None = None, *, validate: bool = True
+    ) -> dict[str, Any] | None:
+        """Return a committed result covering the requested budget, even during extension."""
+        candidates = list(self.progress.get("completed_budgets", {}).values())
+        if self.progress.get("status") == "completed":
+            candidates.append({"step": self.progress["step"], "results": self.progress["results"]})
+        candidates = [item for item in candidates if target is None or item["step"] >= target]
+        if not candidates:
+            return None
+        result = (
+            min(candidates, key=lambda item: item["step"])
+            if target is not None
+            else max(candidates, key=lambda item: item["step"])
+        )
+        if validate:
+            validate_results(self.directory, result["results"])
+        return result
+
     def completed(self) -> bool:
         if self.progress["status"] != "completed":
             return False
@@ -209,7 +230,14 @@ class RunStore:
         manifest: dict[str, Any] = {"chunks": [], "schema": {}}
         step = 0
         retained = []
-        for index, entry in enumerate(self.progress.get("checkpoints", [])):
+        entries = list(self.progress.get("checkpoints", []))
+        endpoints = sorted(
+            self.progress.get("completed_budgets", {}).values(),
+            key=lambda item: item["step"],
+            reverse=True,
+        )
+        entries.extend(item["checkpoint"] for item in endpoints if item.get("checkpoint"))
+        for index, entry in enumerate(entries):
             generation = entry.get("generation", "")
             if not re.fullmatch(r"[a-f0-9]{32}", generation):
                 raise StorageError("Invalid checkpoint generation")
@@ -227,10 +255,14 @@ class RunStore:
                 with np.load(directory / "arrays.npz", allow_pickle=False) as arrays:
                     state = _unpack(snapshot["state"], arrays)
                 manifest, step = snapshot["results"], snapshot["step"]
-                retained = self.progress["checkpoints"][index:]
+                retained = entries[index : index + self.keep_checkpoints]
                 break
             except (StorageError, OSError, ValueError, KeyError):
                 continue
+        if endpoints and step < endpoints[0]["step"]:
+            raise StorageError(
+                "No valid checkpoint covers the completed prefix; saved results were preserved"
+            )
         self.progress["checkpoints"] = retained
         keep = {entry["file"] for entry in manifest["chunks"]}
         for path in (self.directory / "results").iterdir():
@@ -277,6 +309,11 @@ class RunStore:
         atomic_json(self.progress_path, progress)
         self.progress = progress
         retained = {item["generation"] for item in checkpoints}
+        retained.update(
+            item["checkpoint"]["generation"]
+            for item in self.progress.get("completed_budgets", {}).values()
+            if item.get("checkpoint")
+        )
         for obsolete in (self.directory / "checkpoints").iterdir():
             if obsolete.is_dir() and obsolete.name not in retained:
                 for path in obsolete.iterdir():
@@ -284,7 +321,19 @@ class RunStore:
                 obsolete.rmdir()
 
     def finish(self, manifest: dict[str, Any], step: int) -> None:
-        progress = {**self.progress, "status": "completed", "results": manifest, "step": step}
+        completed = dict(self.progress.get("completed_budgets", {}))
+        completed[str(step)] = {
+            "step": step,
+            "results": manifest,
+            "checkpoint": next(iter(self.progress.get("checkpoints", [])), None),
+        }
+        progress = {
+            **self.progress,
+            "status": "completed",
+            "results": manifest,
+            "step": step,
+            "completed_budgets": completed,
+        }
         atomic_json(self.progress_path, progress)
         self.progress = progress
         (self.directory / "failure.json").unlink(missing_ok=True)
@@ -369,40 +418,153 @@ class Recorder:
         return {"chunks": list(self.chunks), "schema": self.schema.copy()}
 
 
-def iter_completed_runs(output_dir: str | Path) -> Iterator[tuple[Any, dict[str, np.ndarray]]]:
-    """Yield validated completed results, loading at most one run at a time."""
+def _instance_fingerprint(descriptor: dict[str, Any], arrays: Mapping[str, np.ndarray]) -> str:
+    digest = hashlib.sha256(fingerprint(descriptor).encode())
+    for name, value in sorted(arrays.items()):
+        array = np.ascontiguousarray(value)
+        digest.update(
+            fingerprint({"name": name, "shape": array.shape, "dtype": array.dtype.str}).encode()
+        )
+        raw = memoryview(array.reshape(-1)).cast("B")
+        for offset in range(0, len(raw), 1024 * 1024):
+            digest.update(raw[offset : offset + 1024 * 1024])
+    return digest.hexdigest()
+
+
+def save_instance(root: Path, instance: Any, *, compression: bool = False) -> str:
+    """Deduplicate immutable scientific instances by metadata and numerical contents."""
+    descriptor = instance.to_dict()
+    arrays = descriptor.pop("arrays")
+    instance_id = _instance_fingerprint(descriptor, arrays)
+    directory = root / "instances" / instance_id
+    if directory.exists():
+        load_instance(root, instance_id)
+        return instance_id
+    temporary = root / "instances" / f".{instance_id}.{uuid.uuid4().hex}.tmp"
+    temporary.mkdir(parents=True)
+    try:
+        write_arrays(temporary / "arrays.npz", arrays, compression)
+        atomic_json(
+            temporary / "metadata.json",
+            {
+                **descriptor,
+                "id": instance_id,
+                "arrays_sha256": digest_file(temporary / "arrays.npz"),
+            },
+        )
+        try:
+            os.rename(temporary, directory)
+            _sync_directory(directory.parent)
+        except OSError:
+            if not directory.is_dir():
+                raise
+            load_instance(root, instance_id)
+    finally:
+        if temporary.exists():
+            shutil.rmtree(temporary)
+    return instance_id
+
+
+def load_instance(root: Path, instance_id: str) -> Any:
+    """Load persisted scientific data without importing the simulator that created it."""
+    from .artifacts import Instance
+
+    if not re.fullmatch(r"[a-f0-9]{64}", instance_id):
+        raise StorageError("Invalid instance identifier")
+    directory = root / "instances" / instance_id
+    descriptor = read_json(directory / "metadata.json")
+    if descriptor.pop("id") != instance_id or digest_file(
+        directory / "arrays.npz"
+    ) != descriptor.pop("arrays_sha256"):
+        raise StorageError(f"Corrupt instance {instance_id}")
+    with np.load(directory / "arrays.npz", allow_pickle=False) as arrays:
+        descriptor["arrays"] = {name: arrays[name] for name in arrays.files}
+    if (
+        _instance_fingerprint(
+            {key: value for key, value in descriptor.items() if key != "arrays"},
+            descriptor["arrays"],
+        )
+        != instance_id
+    ):
+        raise StorageError(f"Instance contents do not match identity {instance_id}")
+    return Instance.from_dict(descriptor)
+
+
+def iter_completed_runs(output_dir: str | Path) -> Iterator[tuple[Any, Any]]:
+    """Yield requested completed prefixes as RunResults, loading one run at a time."""
+    from .artifacts import Instance, RunResult
     from .jobs import RunSpec
 
     root = Path(output_dir)
     metadata = read_json(root / "metadata.json")
-    if metadata.get("schema_version") != SCHEMA_VERSION:
+    version = metadata.get("schema_version")
+    if version not in (SCHEMA_VERSION, EXPERIMENT_SCHEMA_VERSION):
         raise StorageError("Unsupported experiment artifact schema")
     for run_id in sorted(metadata["run_ids"]):
+        if not re.fullmatch(r"[a-f0-9]{20,64}", run_id):
+            raise StorageError("Invalid run identifier")
         directory = root / "runs" / run_id
         if not (directory / "progress.json").exists():
             continue
-        progress = read_json(directory / "progress.json")
-        if progress.get("schema_version") != SCHEMA_VERSION:
-            raise StorageError(f"Unsupported run schema: {directory}")
-        if progress.get("status") != "completed":
-            continue
         run_metadata = read_json(directory / "metadata.json")
-        spec = RunSpec.from_dict(run_metadata["spec"])
-        if spec.run_id != run_id:
+        spec = RunSpec.from_dict(metadata.get("requests", {}).get(run_id, run_metadata["spec"]))
+        if version == SCHEMA_VERSION:
+            if spec.run_id != run_id:
+                raise StorageError(f"Run identity mismatch: {directory}")
+            for key in ("simulation_fingerprint", "implementation_fingerprint"):
+                if key in metadata and run_metadata.get(key) != metadata[key]:
+                    raise StorageError(f"Run provenance mismatch: {directory}")
+        elif run_metadata["spec"]["run_id"] != spec.run_id:
             raise StorageError(f"Run identity mismatch: {directory}")
-        for key in ("simulation_fingerprint", "implementation_fingerprint"):
-            if key in metadata and run_metadata.get(key) != metadata[key]:
-                raise StorageError(f"Run provenance mismatch: {directory}")
-        manifest = progress["results"]
+        store = RunStore(directory)
+        target = getattr(spec, "budget_steps", None)
+        completion = store.completion(target, validate=False)
+        if completion is None:
+            continue
+        manifest = completion["results"]
+        completed_steps = completion["step"] if target is None else target
         total = sum(entry["rows"] for entry in manifest["chunks"])
+        # Prefix requests allocate only their upper bound, not the entire longer run.
+        total = min(total, completed_steps)
         results = {
             key: np.empty((total, *description["shape"]), dtype=description["dtype"])
             for key, description in manifest["schema"].items()
         }
         offset = 0
-        for arrays in _validated_chunks(directory, manifest):
-            count = len(arrays["step"])
+        prefix_chunks = []
+        for entry, arrays in zip(manifest["chunks"], _validated_chunks(directory, manifest)):
+            count = int(np.searchsorted(arrays["step"], completed_steps, side="right"))
+            if count:
+                prefix_chunks.append({**entry, "used_rows": count})
             for key, array in arrays.items():
-                results[key][offset : offset + count] = array
+                results[key][offset : offset + count] = array[:count]
             offset += count
-        yield spec, results
+            if count < len(arrays["step"]) or offset == total:
+                break
+        results = {key: values[:offset] for key, values in results.items()}
+        instance_id = run_metadata.get("instance_id")
+        instance = load_instance(root, instance_id) if instance_id else Instance()
+        revision = fingerprint(
+            {
+                "chunks": prefix_chunks,
+                "instance": instance_id,
+                "steps": completed_steps,
+                "schema": manifest["schema"],
+            }
+        )
+        final_outputs = (
+            {key: values[-1] for key, values in results.items() if key != "step"}
+            if completed_steps == 1
+            else {}
+        )
+        yield (
+            spec,
+            RunResult(
+                records=results,
+                instance=instance,
+                spec=spec,
+                completed_steps=completed_steps,
+                revision=revision,
+                final_outputs=final_outputs,
+            ),
+        )

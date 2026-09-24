@@ -96,7 +96,7 @@ class ExecutionTests(unittest.TestCase):
         report = run_experiment(config, resumed)
         self.assertEqual((report.skipped, report.completed), (8, 0))
 
-    def test_sparse_recording_preserves_final_step_and_cumulative_values(self) -> None:
+    def test_sparse_recording_preserves_scheduled_steps_and_observations(self) -> None:
         settings = self.one_run()
         dense = self.root / "dense"
         sparse = self.root / "sparse"
@@ -107,31 +107,55 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(run_experiment(config, sparse).completed, 1)
         dense_result = next(iter(self.results(dense).values()))
         sparse_result = next(iter(self.results(sparse).values()))
-        np.testing.assert_array_equal(sparse_result["step"], [4, 8, 12, 13])
+        np.testing.assert_array_equal(sparse_result["step"], [4, 8, 12])
         positions = np.searchsorted(dense_result["step"], sparse_result["step"])
-        np.testing.assert_array_equal(sparse_result["regret"], dense_result["regret"][positions])
+        np.testing.assert_array_equal(sparse_result["reward"], dense_result["reward"][positions])
 
-    def test_scientific_configuration_mismatch_is_rejected(self) -> None:
+    def test_changed_science_retains_and_reuses_previous_variant(self) -> None:
         settings = self.one_run()
         output = self.root / "output"
+        original = self.config(settings)
+        self.assertEqual(run_experiment(original, output).completed, 1)
+        settings["runs"][0]["data"]["params"]["noise_std"] = 0.8
         self.assertEqual(run_experiment(self.config(settings), output).completed, 1)
-        settings["runs"][0]["protocol"]["params"]["horizon"] += 1
-        with self.assertRaises(ValueError):
-            run_experiment(self.config(settings), output)
+        self.assertEqual(len(list((output / "runs").iterdir())), 2)
+        self.assertEqual(run_experiment(original, output).skipped, 1)
 
-    def test_component_source_change_is_rejected_before_resume(self) -> None:
+    def test_extension_matches_direct_run_across_worker_counts(self) -> None:
+        settings = deepcopy(self.settings)
+        initial = self.config(settings)
+        extended, direct = self.root / "extended", self.root / "direct"
+        self.assertEqual(run_experiment(initial, extended, workers=2).completed, 8)
+        settings["runs"][0]["protocol"]["params"]["horizon"] = 27
+        longer = self.config(settings)
+        self.assertEqual(run_experiment(longer, extended, max_steps=3).paused, 8)
+        # Earlier completed prefixes remain readable while continuation is paused.
+        self.assertEqual(run_experiment(initial, extended).skipped, 8)
+        self.assertTrue(
+            all(len(result["step"]) == 13 for result in self.results(extended).values())
+        )
+        self.assertEqual(run_experiment(longer, extended, workers=1).completed, 8)
+        self.assertEqual(run_experiment(longer, direct, workers=2).completed, 8)
+        self.assert_same_results(direct, extended)
+        self.assertEqual(len(list((extended / "runs").iterdir())), 8)
+        self.assertEqual(len(list((extended / "instances").iterdir())), 4)
+
+    def test_component_source_change_selects_new_variant(self) -> None:
         config = self.config(self.one_run())
         output = self.root / "output"
         self.assertEqual(run_experiment(config, output, max_steps=4).paused, 1)
         source = self.study / f"{self.module_name}.py"
+        original_source = source.read_text(encoding="utf-8")
         source.write_text(
-            source.read_text(encoding="utf-8") + "\n# A changed scientific implementation.\n",
+            original_source + "\n# A changed scientific implementation.\n",
             encoding="utf-8",
         )
-        with self.assertRaisesRegex(ValueError, "[Ii]mplementation|[Cc]ode|[Ss]ource"):
-            run_experiment(config, output)
+        self.assertEqual(run_experiment(config, output).completed, 1)
+        source.write_text(original_source, encoding="utf-8")
+        self.assertEqual(run_experiment(config, output).completed, 1)
+        self.assertEqual(len(list((output / "runs").iterdir())), 2)
 
-    def test_changed_csv_contents_are_rejected(self) -> None:
+    def test_changed_csv_contents_select_new_variant(self) -> None:
         source = self.study / "input.csv"
         source.write_text("1.0\n2.0\n3.0\n", encoding="utf-8")
         module = "offline_input_change"
@@ -145,8 +169,10 @@ class ExecutionTests(unittest.TestCase):
         output = self.root / "output"
         self.assertEqual(run_experiment(config, output).completed, 1)
         source.write_text("1.0\n2.0\n9.0\n", encoding="utf-8")
-        with self.assertRaisesRegex(ValueError, "[Ii]mplementation|[Ii]nput|[Dd]ataset"):
-            run_experiment(config, output)
+        self.assertEqual(run_experiment(config, output).completed, 1)
+        result = next(iter(self.results(output).values()))
+        np.testing.assert_allclose(result["mean"], [4.0])
+        self.assertEqual(len(list((output / "runs").iterdir())), 2)
 
     def test_max_steps_requires_a_nonnegative_integer(self) -> None:
         config = self.config(self.one_run())
@@ -160,7 +186,7 @@ class ExecutionTests(unittest.TestCase):
         self.assertEqual(run_experiment(self.config(settings), output, max_steps=4).paused, 1)
         settings["execution"]["checkpoint_steps"] = 5
         settings["analysis"] = {
-            "metrics": [{"name": "regret", "type": "field", "params": {"field": "regret"}}]
+            "metrics": [{"name": "regret", "type": "field", "params": {"field": "reward"}}]
         }
         self.assertEqual(run_experiment(self.config(settings), output).completed, 1)
 

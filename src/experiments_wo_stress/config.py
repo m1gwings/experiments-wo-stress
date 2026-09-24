@@ -22,6 +22,9 @@ _EXECUTION = {
     "checkpoint_steps": None,
     "keep_checkpoints": 2,
     "compression": False,
+    "logging_level": "INFO",
+    "log_max_bytes": 2 * 1024 * 1024,
+    "log_backups": 2,
 }
 _RECORDING = {"every_steps": 1, "fields": None, "buffer_bytes": 16 * 1024 * 1024}
 _CSV_TYPES = {"csv", "experiments_wo_stress.data:CSVDataGenerator"}
@@ -143,13 +146,28 @@ def _component(
 ) -> dict[str, Any]:
     value = copy.deepcopy(_mapping(value, path))
     _keys(
-        value, {"type", "params", "seed", "name"} if algorithm else {"type", "params", "seed"}, path
+        value,
+        {"type", "params", "seed", "dependencies", "name"}
+        if algorithm
+        else {"type", "params", "seed", "dependencies"},
+        path,
     )
     _text(value.get("type"), f"{path}.type")
     value.setdefault("params", {})
     _mapping(value["params"], f"{path}.params")
-    if "rng" in value["params"]:
-        raise ValueError(f"{path}.params.rng is injected by the library; configure seed instead")
+    if {"rng", "instance", "logger"}.intersection(value["params"]):
+        raise ValueError(
+            f"{path}.params contains a library-injected argument (rng, instance, or logger)"
+        )
+    if "dependencies" in value:
+        dependencies = value["dependencies"]
+        if not isinstance(dependencies, list) or any(
+            not isinstance(item, str) or not item for item in dependencies
+        ):
+            raise ValueError(f"{path}.dependencies must be a list of file paths")
+        value["dependencies"] = sorted(
+            {str((source_dir / item).resolve()) for item in dependencies}
+        )
     value.setdefault("seed", None)
     if value["seed"] is not None:
         _integer(value["seed"], f"{path}.seed")
@@ -165,7 +183,15 @@ def _component(
 def _group(value: Any, index: int, source_dir: Path) -> dict[str, Any]:
     path = f"runs[{index}]"
     value = copy.deepcopy(_mapping(value, path))
-    _keys(value, {"name", "planner", "repetitions", "protocol", "data", "algorithms", "grid"}, path)
+    _keys(
+        value,
+        {"name", "planner", "repetitions", "protocol", "data", "algorithms", "grid", "budget"},
+        path,
+    )
+    if "budget" in value:
+        budget = _mapping(value["budget"], f"{path}.budget")
+        _keys(budget, {"steps"}, f"{path}.budget")
+        _integer(budget.get("steps"), f"{path}.budget.steps", 1)
     value.setdefault("name", f"group_{index}")
     _text(value["name"], f"{path}.name")
     value.setdefault("planner", "grid")
@@ -195,7 +221,7 @@ def _group(value: Any, index: int, source_dir: Path) -> dict[str, Any]:
             or parts[0] not in {"algorithm", "data", "protocol"}
             or parts[1] != "params"
             or any(not part for part in parts)
-            or parts[2] == "rng"
+            or parts[2] in {"rng", "instance", "logger"}
         ):
             raise ValueError(
                 f"Invalid grid path {axis!r}; use algorithm.params.*, data.params.*, or protocol.params.*"
@@ -236,6 +262,18 @@ def load_config(path: str | Path) -> ExperimentConfig:
     execution = {**_EXECUTION, **execution}
     for key in ("workers", "keep_checkpoints"):
         _integer(execution[key], f"execution.{key}", 1)
+    _integer(execution["log_max_bytes"], "execution.log_max_bytes", 1)
+    _integer(execution["log_backups"], "execution.log_backups", 1)
+    level = execution["logging_level"]
+    if not isinstance(level, str) or level.upper() not in {
+        "DEBUG",
+        "INFO",
+        "WARNING",
+        "ERROR",
+        "CRITICAL",
+    }:
+        raise ValueError("execution.logging_level must be DEBUG, INFO, WARNING, ERROR, or CRITICAL")
+    execution["logging_level"] = level.upper()
     if execution["checkpoint_steps"] is not None:
         _integer(execution["checkpoint_steps"], "execution.checkpoint_steps", 1)
     seconds = execution["checkpoint_seconds"]

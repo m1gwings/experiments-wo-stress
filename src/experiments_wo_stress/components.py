@@ -2,14 +2,17 @@
 
 from __future__ import annotations
 
+import copy
 import importlib
 import inspect
+import logging
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from typing import Any, Protocol, runtime_checkable
 
 import numpy as np
 
+from .artifacts import Instance
 from .jobs import ComponentSpec
 
 
@@ -70,6 +73,8 @@ class StateMixin:
 class NullAlgorithm(StateMixin):
     """Placeholder for trial functions that do not need an algorithm object."""
 
+    supports_extension = True
+
     def __init__(self, *, rng: np.random.Generator) -> None:
         self.rng = rng
 
@@ -82,6 +87,11 @@ _ALIASES = {
     "normal": "experiments_wo_stress.data:NormalDataGenerator",
     "null": "experiments_wo_stress.data:NullDataGenerator",
     "null_algorithm": "experiments_wo_stress.components:NullAlgorithm",
+    "stationary_bandit": "experiments_wo_stress.settings:StationaryBandit",
+    "gaussian_bandit": "experiments_wo_stress.settings:GaussianBandit",
+    "nonstationary_bandit": "experiments_wo_stress.settings:NonstationaryBandit",
+    "gymnasium": "experiments_wo_stress.settings:GymnasiumAdapter",
+    "rl": "experiments_wo_stress.protocols:RLProtocol",
 }
 
 
@@ -107,19 +117,73 @@ def resolve_type(path_or_alias: str) -> Any:
     return value
 
 
-def construct(spec: ComponentSpec, rng: np.random.Generator) -> Any:
-    """Construct one fresh component with its own explicitly injected generator."""
+def constructor_kwargs(
+    spec: ComponentSpec,
+    rng: np.random.Generator,
+    *,
+    instance: Instance | None = None,
+    logger: logging.Logger | logging.LoggerAdapter | None = None,
+) -> dict[str, Any]:
+    """Build constructor arguments, injecting supported optional capabilities."""
     factory = resolve_type(spec.type)
-    if "rng" in spec.params:
-        raise ValueError(f"{spec.type}: rng is injected; configure seed instead")
-    parameters = {"rng": rng, **spec.params}
+    reserved = {"rng", "instance", "logger"}.intersection(spec.params)
+    if reserved:
+        raise ValueError(f"{spec.type}: {', '.join(sorted(reserved))} is injected by the library")
+    parameters = {"rng": rng, **copy.deepcopy(spec.params)}
     try:
-        inspect.signature(factory).bind(**parameters)
+        signature = inspect.signature(factory)
     except ValueError:
-        pass  # Some extension types do not expose a Python signature.
+        return parameters  # Some extension types do not expose a Python signature.
+    accepts_kwargs = any(
+        item.kind == inspect.Parameter.VAR_KEYWORD for item in signature.parameters.values()
+    )
+    for name, value in (("instance", instance), ("logger", logger)):
+        # Forwarding **kwargs wrappers must not unexpectedly receive a logger or
+        # a None instance that their wrapped, older constructor cannot accept.
+        if name in signature.parameters or (
+            name == "instance" and value is not None and accepts_kwargs
+        ):
+            parameters[name] = value
+    try:
+        signature.bind(**parameters)
     except TypeError as exc:
         raise TypeError(f"Invalid parameters for {spec.type}: {exc}") from exc
-    return factory(**parameters)
+    return parameters
+
+
+def construct(
+    spec: ComponentSpec,
+    rng: np.random.Generator,
+    *,
+    instance: Instance | None = None,
+    logger: logging.Logger | logging.LoggerAdapter | None = None,
+) -> Any:
+    """Construct a fresh component, retaining compatibility with older classes."""
+    component_logger = (
+        logger if logger is not None else logging.getLogger(f"experiments_wo_stress.{spec.type}")
+    )
+    component = resolve_type(spec.type)(
+        **constructor_kwargs(spec, rng, instance=instance, logger=component_logger)
+    )
+    try:
+        component.logger = component_logger
+    except (AttributeError, TypeError):
+        pass  # Slotted or frozen user components can opt into constructor injection.
+    return component
+
+
+def create_instance(spec: ComponentSpec, rng: np.random.Generator) -> Instance:
+    """Create an immutable scientific instance or a generic component descriptor."""
+    factory = resolve_type(spec.type)
+    hook = getattr(factory, "create_instance", None)
+    if hook is None:
+        return Instance(metadata={"data": spec.to_dict()})
+    if not callable(hook):
+        raise TypeError(f"{spec.type}.create_instance must be callable")
+    instance = hook(rng=rng, **copy.deepcopy(spec.params))
+    if not isinstance(instance, Instance):
+        raise TypeError(f"{spec.type}.create_instance must return an Instance")
+    return instance
 
 
 def validate_component(instance: Any, methods: Iterable[str]) -> None:

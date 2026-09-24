@@ -8,7 +8,17 @@ from typing import Any
 
 import numpy as np
 
-from .analysis import Summary, _canonical, _load_class, _safe_name, analyze
+from .analysis import (
+    Summary,
+    _cache_identity,
+    _canonical,
+    _copy_exports,
+    _load_class,
+    _publish_cache,
+    _safe_name,
+    _source_identity,
+    analyze,
+)
 
 _COLORS = ("#0072B2", "#D55E00", "#009E73", "#CC79A7", "#E69F00", "#56B4E9", "#000000")
 _LABELS = {"standard_error": "standard error", "std": "sample standard deviation"}
@@ -130,8 +140,14 @@ def plot(config: Any, output_dir: str | Path) -> list[Path]:
                 )
         prepared.append((figure, selected, name))
 
+    from .storage import atomic_json, digest_file, fingerprint, read_json
+
+    current = read_json(Path(output_dir) / "analysis" / "current.json")
     paths: list[Path] = []
+    cache_keys = []
     for figure, selected, name in prepared:
+        plotter = None
+        implementation = {"exporter": digest_file(Path(__file__))}
         if figure.get("type", "line") != "line":
             params = figure.get("params", {})
             if not isinstance(params, dict):
@@ -141,15 +157,55 @@ def plot(config: Any, output_dir: str | Path) -> list[Path]:
                 raise TypeError(
                     "A custom plotter must implement plot(summaries, figure, output_dir)"
                 )
-            paths.extend(Path(path) for path in plotter.plot(selected, figure, output))
-            continue
+            implementation["custom"] = _source_identity(type(plotter))
         formats = figure.get("formats", ["pdf"])
-        if any(fmt in {"pdf", "jpg"} for fmt in formats):
-            paths.extend(_matplotlib(selected, figure, output, name))
-        if "tikz" in formats:
-            target = output / f"{name}.tikz"
-            target.write_text(_tikz(selected, figure), encoding="utf-8")
-            paths.append(target)
+        if plotter is None and any(fmt in {"pdf", "jpg"} for fmt in formats):
+            from importlib.metadata import PackageNotFoundError, version
+
+            try:
+                implementation["matplotlib"] = version("matplotlib")
+            except PackageNotFoundError as exc:
+                raise ImportError("PDF/JPG export needs experiments-wo-stress[plot]") from exc
+        identity = _cache_identity(
+            "plot",
+            aggregate=current["aggregate_key"],
+            figure=figure,
+            name=name,
+            implementation=implementation,
+        )
+
+        def render(target: Path) -> None:
+            generated = []
+            if plotter is not None:
+                generated.extend(Path(path) for path in plotter.plot(selected, figure, target))
+            else:
+                if any(fmt in {"pdf", "jpg"} for fmt in formats):
+                    generated.extend(_matplotlib(selected, figure, target, name))
+                if "tikz" in formats:
+                    path = target / f"{name}.tikz"
+                    path.write_text(_tikz(selected, figure), encoding="utf-8")
+                    generated.append(path)
+            filenames = []
+            for path in generated:
+                path = path if path.is_absolute() else target / path
+                try:
+                    relative = path.resolve().relative_to(target.resolve())
+                except ValueError as exc:
+                    raise ValueError(
+                        "Custom plotters must write inside their output directory"
+                    ) from exc
+                if not path.is_file():
+                    raise ValueError(f"Plotter returned a missing figure: {path}")
+                filenames.append(relative.as_posix())
+            atomic_json(target / "figures.json", {"files": filenames})
+
+        directory = _publish_cache(output.parent / "cache" / "plots", identity, render)
+        filenames = read_json(directory / "figures.json")["files"]
+        _copy_exports(directory, output, filenames)
+        paths.extend(output / filename for filename in filenames)
+        cache_keys.append(fingerprint(identity))
+    current["plot_keys"] = cache_keys
+    atomic_json(output.parent / "current.json", current)
     return paths
 
 

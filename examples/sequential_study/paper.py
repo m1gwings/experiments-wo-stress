@@ -6,33 +6,58 @@ interaction loop, independent repetitions, persistence, and analysis.
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 import numpy as np
 
 from experiments_wo_stress import Feedback
+from experiments_wo_stress.artifacts import Instance
 
 
 class GaussianBandit:
     """An environment with fixed arm means and independent Gaussian rewards.
 
-    Cumulative pseudo-regret is updated on *every* interaction, so recording only
-    selected steps still preserves the full cumulative quantity at those steps.
-    The means and regret remain evaluator information; algorithms see rewards.
+    The generated arm means are saved once as an immutable instance. Each run
+    records actions and rewards; a separate metric computes pseudo-regret using
+    those observations and the saved means.
     """
 
+    supports_extension = True
+    logger = logging.getLogger(__name__)
+
+    @classmethod
+    def create_instance(
+        cls, *, rng: np.random.Generator, n_arms: int = 10, noise_std: float = 0.1
+    ) -> Instance:
+        if n_arms < 2:
+            raise ValueError("n_arms must be at least two")
+        if not np.isfinite(noise_std) or noise_std < 0:
+            raise ValueError("noise_std must be finite and nonnegative")
+        return Instance(
+            kind="stationary_bandit",
+            metadata={"n_arms": n_arms, "noise_std": noise_std},
+            arrays={"means": rng.uniform(0.0, 1.0, n_arms)},
+        )
+
     def __init__(
-        self, *, rng: np.random.Generator, n_arms: int = 10, noise_std: float = 0.1
+        self,
+        *,
+        rng: np.random.Generator,
+        instance: Instance,
+        n_arms: int = 10,
+        noise_std: float = 0.1,
     ) -> None:
         if n_arms < 2:
             raise ValueError("n_arms must be at least two")
         if not np.isfinite(noise_std) or noise_std < 0:
             raise ValueError("noise_std must be finite and nonnegative")
         self.rng = rng
-        self.means = rng.uniform(0.0, 1.0, n_arms)
+        self.means = instance.arrays["means"]
+        if len(self.means) != n_arms:
+            raise ValueError("saved instance does not match the configured arm count")
         self.noise_std = noise_std
         self.round = 0
-        self.regret = 0.0
 
     def context(self) -> dict[str, int]:
         """Expose the action-space size without exposing the unknown arm means."""
@@ -43,22 +68,20 @@ class GaussianBandit:
             raise ValueError("action must be a valid arm index")
         reward = float(self.rng.normal(self.means[action], self.noise_std))
         self.round += 1
-        self.regret += float(self.means.max() - self.means[action])
-        return Feedback(reward, {"action": action, "reward": reward, "regret": self.regret})
+        self.logger.debug("round=%d action=%d reward=%.8g", self.round, action, reward)
+        return Feedback(reward, {"action": action, "reward": reward})
 
     def state_dict(self) -> dict[str, Any]:
-        return {"means": self.means, "round": self.round, "regret": self.regret}
+        return {"round": self.round}
 
     def load_state_dict(self, state: dict[str, Any]) -> None:
-        self.means = np.array(state["means"], copy=True)
         self.round = int(state["round"])
-        self.regret = float(state["regret"])
 
 
 class ClippedFeedbackBandit(GaussianBandit):
     """An example feedback rule: clip the observation delivered to the algorithm.
 
-    Underlying Gaussian rewards and pseudo-regret retain their original meaning.
+    Underlying Gaussian rewards and arm means retain their original meaning.
     This changes the learning problem and is deliberately opt-in.
     """
 
@@ -111,6 +134,8 @@ class UCB(_SampleMeans):
     claim a confidence guarantee for every possible reward distribution.
     """
 
+    supports_extension = True
+
     def __init__(
         self, *, rng: np.random.Generator, n_arms: int | None = None, exploration: float = 0.1
     ) -> None:
@@ -130,6 +155,8 @@ class UCB(_SampleMeans):
 
 class EpsilonGreedy(_SampleMeans):
     """Explore with fixed probability; otherwise choose the largest sample mean."""
+
+    supports_extension = True
 
     def __init__(
         self, *, rng: np.random.Generator, n_arms: int | None = None, epsilon: float = 0.1

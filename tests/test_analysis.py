@@ -28,7 +28,7 @@ class AnalysisTests(unittest.TestCase):
         self.run_ids: list[str] = []
         # These modules deliberately do not exist: analysis must not import them.
         self.base = RunSpec(
-            "first",
+            "aaaaaaaaaaaaaaaaaaaa",
             "study",
             0,
             "algorithm_50%",
@@ -76,9 +76,11 @@ class AnalysisTests(unittest.TestCase):
 
     def test_mean_and_sample_standard_error_across_independent_runs(self) -> None:
         self.save_run(self.base, [1, 2, 3])
-        self.save_run(replace(self.base, run_id="second", repetition=1), [3, 6, 9])
+        self.save_run(replace(self.base, run_id="bbbbbbbbbbbbbbbbbbbb", repetition=1), [3, 6, 9])
         self.save_run(
-            replace(self.base, run_id="pending", repetition=2), [100, 100, 100], completed=False
+            replace(self.base, run_id="cccccccccccccccccccc", repetition=2),
+            [100, 100, 100],
+            completed=False,
         )
         summaries = analyze(self.config(), self.root)
         self.assertEqual(len(summaries), 1)
@@ -104,7 +106,7 @@ class AnalysisTests(unittest.TestCase):
         self.save_run(self.base, [1, 2, 3])
         other = replace(
             self.base,
-            run_id="other",
+            run_id="dddddddddddddddddddd",
             repetition=1,
             algorithm=ComponentSpec(self.base.algorithm.type, {"rate": 0.9}),
         )
@@ -117,11 +119,14 @@ class AnalysisTests(unittest.TestCase):
 
     def test_rejects_duplicate_repetitions_and_misaligned_curves(self) -> None:
         self.save_run(self.base, [1, 2, 3])
-        self.save_run(replace(self.base, run_id="second"), [3, 4, 5])
+        self.save_run(replace(self.base, run_id="bbbbbbbbbbbbbbbbbbbb"), [3, 4, 5])
         with self.assertRaisesRegex(ValueError, "Duplicate repetition"):
             analyze(self.config(), self.root)
-        metadata = self.root / "runs" / "second" / "metadata.json"
-        atomic_json(metadata, {"spec": replace(self.base, run_id="second", repetition=1).to_dict()})
+        metadata = self.root / "runs" / "bbbbbbbbbbbbbbbbbbbb" / "metadata.json"
+        atomic_json(
+            metadata,
+            {"spec": replace(self.base, run_id="bbbbbbbbbbbbbbbbbbbb", repetition=1).to_dict()},
+        )
         # Change the x axis using a custom metric, preserving valid storage itself.
         settings = deepcopy(self.settings)
         settings["metrics"][0]["params"]["x"] = "reward"
@@ -130,7 +135,7 @@ class AnalysisTests(unittest.TestCase):
 
     def test_tikz_regeneration_needs_no_simulation_modules(self) -> None:
         self.save_run(self.base, [1, 2, 3])
-        self.save_run(replace(self.base, run_id="second", repetition=1), [3, 4, 5])
+        self.save_run(replace(self.base, run_id="bbbbbbbbbbbbbbbbbbbb", repetition=1), [3, 4, 5])
         paths = plot(self.config(), self.root)
         self.assertEqual([path.suffix for path in paths], [".tikz"])
         source = paths[0].read_text(encoding="utf-8")
@@ -184,7 +189,9 @@ class AnalysisTests(unittest.TestCase):
 
     def test_scalar_figure_uses_visible_marker_and_error_bar(self) -> None:
         self.save_run(self.base, [1], steps=(1,))
-        self.save_run(replace(self.base, run_id="second", repetition=1), [3], steps=(1,))
+        self.save_run(
+            replace(self.base, run_id="bbbbbbbbbbbbbbbbbbbb", repetition=1), [3], steps=(1,)
+        )
         source = plot(self.config(), self.root)[0].read_text()
         self.assertIn("only marks,mark=*", source)
         self.assertIn("error bars/.cd,y dir=both,y explicit", source)

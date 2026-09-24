@@ -13,6 +13,13 @@ from typing import TYPE_CHECKING, Any, Protocol
 if TYPE_CHECKING:
     from .config import ExperimentConfig
 
+_BUDGET_PROTOCOLS = {
+    "online",
+    "rl",
+    "experiments_wo_stress.protocols:OnlineProtocol",
+    "experiments_wo_stress.protocols:RLProtocol",
+}
+
 
 def canonical_json(value: Any) -> str:
     """Serialize configuration deterministically, rejecting nonfinite numbers."""
@@ -26,13 +33,22 @@ class ComponentSpec:
     type: str
     params: dict[str, Any] = field(default_factory=dict)
     seed: int | None = None
+    dependencies: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
-        return {"type": self.type, "params": copy.deepcopy(self.params), "seed": self.seed}
+        value = {"type": self.type, "params": copy.deepcopy(self.params), "seed": self.seed}
+        if self.dependencies:
+            value["dependencies"] = list(self.dependencies)
+        return value
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ComponentSpec:
-        return cls(value["type"], copy.deepcopy(value.get("params", {})), value.get("seed"))
+        return cls(
+            value["type"],
+            copy.deepcopy(value.get("params", {})),
+            value.get("seed"),
+            tuple(value.get("dependencies", ())),
+        )
 
 
 @dataclass(frozen=True)
@@ -47,6 +63,7 @@ class RunSpec:
     data: ComponentSpec
     protocol: ComponentSpec
     seed: int
+    budget_steps: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -58,6 +75,7 @@ class RunSpec:
             "data": self.data.to_dict(),
             "protocol": self.protocol.to_dict(),
             "seed": self.seed,
+            "budget_steps": self.budget_steps,
         }
 
     @classmethod
@@ -74,6 +92,7 @@ class RunSpec:
             "group": self.group,
             "repetition": self.repetition,
             "algorithm.name": self.algorithm_name,
+            "budget.steps": self.budget_steps,
         }
 
         def flatten(prefix: str, value: Any) -> None:
@@ -123,6 +142,7 @@ def make_run_spec(
     data: ComponentSpec | Mapping[str, Any],
     protocol: ComponentSpec | Mapping[str, Any],
     seed: int,
+    budget_steps: int | None = None,
 ) -> RunSpec:
     """Build a validated run with the library's stable scientific identity.
 
@@ -136,6 +156,10 @@ def make_run_spec(
     for name, value in (("repetition", repetition), ("seed", seed)):
         if isinstance(value, bool) or not isinstance(value, int) or value < 0:
             raise ValueError(f"Run {name} must be a nonnegative integer")
+    if budget_steps is not None and (
+        isinstance(budget_steps, bool) or not isinstance(budget_steps, int) or budget_steps < 1
+    ):
+        raise ValueError("Run budget_steps must be a positive integer or None")
     descriptors = {}
     for name, component in (("algorithm", algorithm), ("data", data), ("protocol", protocol)):
         if isinstance(component, Mapping):
@@ -147,8 +171,12 @@ def make_run_spec(
         if not isinstance(component.params, dict):
             raise ValueError(f"Run {name}.params must be a mapping")
         _plain_values(component.params)
-        if "rng" in component.params:
-            raise ValueError(f"Run {name}.params.rng is injected; configure seed instead")
+        if {"rng", "instance", "logger"}.intersection(component.params):
+            raise ValueError(f"Run {name} parameters contain a library-injected argument")
+        if not isinstance(component.dependencies, (list, tuple)) or any(
+            not isinstance(item, str) or not item for item in component.dependencies
+        ):
+            raise ValueError(f"Run {name}.dependencies must contain file paths")
         if component.seed is not None and (
             isinstance(component.seed, bool)
             or not isinstance(component.seed, int)
@@ -156,6 +184,24 @@ def make_run_spec(
         ):
             raise ValueError(f"Run {name}.seed must be a nonnegative integer or None")
         descriptors[name] = component.to_dict()
+    if descriptors["protocol"]["type"] in _BUDGET_PROTOCOLS:
+        legacy_horizon = descriptors["protocol"]["params"].pop("horizon", None)
+        if legacy_horizon is not None:
+            if (
+                isinstance(legacy_horizon, bool)
+                or not isinstance(legacy_horizon, int)
+                or legacy_horizon < 1
+            ):
+                raise ValueError("Online horizon must be a positive integer")
+            if budget_steps is not None and budget_steps != legacy_horizon:
+                raise ValueError(
+                    "budget.steps conflicts with protocol.params.horizon; use only budget.steps"
+                )
+            budget_steps = legacy_horizon
+        if budget_steps is None:
+            raise ValueError(
+                "Online and RL runs require budget.steps or legacy protocol.params.horizon"
+            )
     identity = {
         "group": group,
         "repetition": repetition,
@@ -164,7 +210,7 @@ def make_run_spec(
         "seed": seed,
     }
     run_id = hashlib.sha256(canonical_json(identity).encode()).hexdigest()[:20]
-    return RunSpec.from_dict({"run_id": run_id, **identity})
+    return RunSpec.from_dict({"run_id": run_id, **identity, "budget_steps": budget_steps})
 
 
 class RunPlanner(Protocol):
@@ -202,6 +248,7 @@ class GridPlanner:
                         data=components["data"],
                         protocol=components["protocol"],
                         seed=seed,
+                        budget_steps=group.get("budget", {}).get("steps"),
                     )
 
 

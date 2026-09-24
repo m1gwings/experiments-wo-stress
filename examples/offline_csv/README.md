@@ -28,8 +28,15 @@ fit is interrupted before its single step finishes, it restarts that fit. For
 checkpointing inside a long fit, supply an incremental interaction protocol with
 safe steps.
 
+The generator's persisted instance contains the input matrix as `arrays['data']`
+with CSV source metadata and a content hash. Run results expose that instance
+alongside numerical outputs so custom metrics can inspect it without
+constructing the estimator or generator. Repeating analysis reuses valid caches.
+
 To use another estimator, define a class with `fit`, `state_dict`, and
 `load_state_dict`, then change `algorithms[].type` and its `params` in YAML. To
 replace the CSV source with synthetic data, provide a generator implementing
-`generate(request)`, `state_dict`, and `load_state_dict`. Scientific changes belong
-in a new output directory.
+`generate(request)`, `state_dict`, and `load_state_dict`. Scientific changes select
+separate retained run variants. This one-step offline protocol does not opt in to
+continuation at larger budgets; a larger requested computation needs its own
+scientific configuration or an incremental protocol.

@@ -153,6 +153,7 @@ class ConfigurationTests(unittest.TestCase):
             data=run.data.to_dict(),
             protocol=run.protocol,
             seed=run.seed,
+            budget_steps=run.budget_steps,
         )
         self.assertEqual(rebuilt, run)
         self.assertIsNot(rebuilt.data.params, run.data.params)
@@ -180,6 +181,43 @@ class ConfigurationTests(unittest.TestCase):
         changed = self.load()
         self.assertNotEqual(original.simulation_dict(), changed.simulation_dict())
         self.assertEqual(plan_runs(original), plan_runs(changed))
+
+    def test_execution_budget_changes_preserve_scientific_identity_and_rngs(self):
+        original = plan_runs(self.load())[0]
+        self.document["runs"][0]["protocol"]["params"].pop("horizon")
+        self.document["runs"][0]["budget"] = {"steps": 20}
+        extended = plan_runs(self.load())[0]
+        self.assertEqual(original.budget_steps, 5)
+        self.assertEqual(extended.budget_steps, 20)
+        self.assertEqual(original.run_id, extended.run_id)
+        self.assertNotIn("horizon", original.protocol.params)
+        for stream in ("algorithm", "data", "protocol", "instance"):
+            np.testing.assert_array_equal(
+                make_rngs(original)[stream].normal(size=20),
+                make_rngs(extended)[stream].normal(size=20),
+            )
+        self.document["runs"][0]["algorithms"][0]["params"]["design_horizon"] = 20
+        self.assertNotEqual(original.run_id, plan_runs(self.load())[0].run_id)
+
+    def test_dependency_paths_and_logging_settings(self):
+        self.document["runs"][0]["data"]["dependencies"] = ["helpers.py", "inputs/data.csv"]
+        self.document["execution"] = {
+            "logging_level": "debug",
+            "log_max_bytes": 4096,
+            "log_backups": 3,
+        }
+        config = self.load()
+        dependencies = plan_runs(config)[0].data.dependencies
+        self.assertEqual(
+            dependencies,
+            (str(self.path.parent / "helpers.py"), str(self.path.parent / "inputs/data.csv")),
+        )
+        self.assertEqual(config.execution["logging_level"], "DEBUG")
+        self.assertEqual(config.execution["log_max_bytes"], 4096)
+        for key, value in (("logging_level", "verbose"), ("log_max_bytes", 0), ("log_backups", -1)):
+            self.document["execution"] = {key: value}
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                self.load()
 
     def test_component_seed_overrides(self):
         run = plan_runs(self.load())[0]

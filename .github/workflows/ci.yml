@@ -23,14 +23,16 @@ jobs:
           python-version: ${{ matrix.python-version }}
           cache: pip
       - name: Install package and development tools
-        run: python -m pip install -e '.[dev,plot]' wheel
+        run: python -m pip install -e '.[dev,plot,gym]' wheel
       - name: Test
         run: python -m pytest
+      - name: Check documentation and examples
+        run: python scripts/check_docs.py --examples --cli
       - name: Check style
         if: matrix.python-version == '3.12'
         run: |
-          ruff check src tests examples
-          ruff format --check src tests examples
+          ruff check src tests examples scripts
+          ruff format --check src tests examples scripts
       - name: Build distributions
         if: matrix.python-version == '3.12'
         run: python -m build --no-isolation

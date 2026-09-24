@@ -1,30 +1,34 @@
 # Experiments W/O Stress
 
-Reproducible numerical experiments, from repeated runs to publication figures.
+Repeatable numerical experiments, from a YAML study to publication figures.
 
-Define the algorithms, data sources, and scientific interaction in your paper's
-Python code. Describe the study in YAML. Experiments W/O Stress handles deterministic
-random streams, local execution, checkpoints, result storage, and analysis.
+Define algorithms and scientific interactions in ordinary Python. Experiments W/O
+Stress manages independent runs, generated instances, checkpointing, saved
+observations, and analysis. The intended scale is a laptop or modest multicore
+machine.
 
-**Status: experimental initial implementation.** The examples and tests exercise
-the complete workflow; the API still needs validation in a real paper project.
-The intended scale is a laptop or a modest multicore machine.
+**Status: experimental implementation.** The examples and tests exercise the full
+workflow; the public API still needs validation in a real paper project.
 
 ## What it provides
 
-- A shared data-generator interface for synthetic data, CSV datasets, and evolving
-  environments; offline, online, and callable-trial protocols.
-- Cartesian parameter grids, independent repetitions, and custom run planners.
-- Separate reproducible RNGs for algorithm, data, and protocol, independent of
-  worker count and execution order.
-- Periodic checkpoints, validated completed outputs, and recovery after interruption.
-- Buffered NumPy artifacts, inspectable metadata and failures, and optional compression.
-- Metrics and repeated-run summaries computed from saved results, with PDF, JPG,
-  and editable TikZ/PGFPlots figures.
+- A common interface for synthetic data, stored CSV datasets, and evolving
+  environments, with online, offline, callable-trial, and reinforcement-learning
+  interaction helpers.
+- Parameter grids, independent repetitions, and custom run planners.
+- Independent instance, algorithm, environment, and protocol RNGs, reproducible
+  across execution order and worker counts.
+- Saved instances, selected numerical observations, rotating run logs, and recovery
+  from committed checkpoints.
+- Continued execution at larger budgets when components support it, with previous
+  requests and recording variants retained.
+- Metrics computed from observations and instances, cached aggregation, and PDF,
+  JPG, and editable TikZ/PGFPlots figures.
+- Reusable bandit settings and an optional Gymnasium adapter.
 
 ## Install
 
-Python 3.10 or newer is required. Install from this checkout:
+Python 3.10 or newer is required. From this checkout:
 
 ```bash
 python -m venv .venv
@@ -32,38 +36,42 @@ source .venv/bin/activate
 python -m pip install -e '.[plot]'
 ```
 
-On Windows, activate the environment with `.venv\Scripts\activate` instead.
-The core package needs NumPy and PyYAML. The `plot` extra adds Matplotlib for
-PDF/JPG export; generating TikZ source does not require Matplotlib or LaTeX.
+On Windows, activate with `.venv\Scripts\activate`. The core needs NumPy and
+PyYAML. The `plot` extra supplies Matplotlib for PDF/JPG; TikZ source export needs
+neither Matplotlib nor LaTeX. The `gym` extra installs Gymnasium for its adapter.
 
-## Run the example
+## Build a study
 
-The [sequential study](examples/sequential_study/README.md) compares UCB and
-epsilon-greedy on three Gaussian bandit sizes, with 20 repetitions per algorithm
-and size: 120 runs in total.
+The [sequential example](examples/sequential_study/README.md) compares UCB and
+epsilon-greedy on three Gaussian bandit sizes, with 20 repetitions per combination.
+It saves arm means as an instance and records actions and rewards. Regret is
+computed afterward by a metric, independently of the simulation.
 
 ```bash
 ews plan examples/sequential_study/experiment.yml
-ews run examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
+ews build examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
 ews inspect outputs/bandits
-ews plot examples/sequential_study/experiment.yml --output outputs/bandits
 ```
 
-Figures appear in `outputs/bandits/analysis/figures/`; summary tables are in
-`outputs/bandits/analysis/`. Run the same `ews run` command again to validate and
-skip completed runs. After an interruption, it continues unfinished runs from
-their last valid checkpoints.
+`build` executes the selected runs and produces the analysis configured in YAML.
+Figures are in `outputs/bandits/analysis/figures/`. Repeating the command validates
+and reuses available execution and analysis artifacts.
 
-To try resumption deliberately, use a fresh output directory:
+For deliberate interruption and resumption:
 
 ```bash
 ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --max-steps 250
 ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --workers 2
+ews plot examples/sequential_study/experiment.yml --output outputs/resume-demo
 ```
 
-The [offline CSV example](examples/offline_csv/README.md) demonstrates the same
-data interface for a stored dataset. Both examples keep their scientific code
-outside the library.
+Increase a group's `budget.steps` to continue compatible components from their saved
+final state. A different recording selection retains another variant. Scientific
+or implementation changes select affected work again while preserving existing
+artifacts. The active request tells analysis which results to use.
+
+The [CSV example](examples/offline_csv/README.md) demonstrates the same generator
+interface with a stored dataset and an offline estimator.
 
 ## Python API
 
@@ -79,32 +87,41 @@ if __name__ == "__main__":
         plot(config, "outputs/bandits")
 ```
 
-The main guard is needed when starting local worker processes. Use `workers=1`
-for a simple sequential session.
+The main guard is needed when starting worker processes. Use one worker for a
+simple sequential session. Paper components receive their RNGs explicitly and can
+write diagnostics through the logger attached to each run component.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `ews plan CONFIG` | Validate the configuration and display the run plan. |
+| `ews plan CONFIG` | Validate configuration and display the run plan. |
+| `ews build CONFIG --output DIR` | Execute and produce configured analysis. |
 | `ews run CONFIG --output DIR` | Execute or resume; accepts `--workers` and `--max-steps`. |
-| `ews inspect DIR` | Read progress and validate completed results. |
-| `ews analyze CONFIG --output DIR` | Recompute metrics and summary tables from saved results. |
-| `ews plot CONFIG --output DIR` | Recompute summaries and regenerate configured figures. |
+| `ews inspect DIR` | Inspect active work and stored result validity. |
+| `ews analyze CONFIG --output DIR` | Compute or reuse metric and aggregate artifacts. |
+| `ews plot CONFIG --output DIR` | Compute or reuse analysis and configured figures. |
+| `ews clean DIR --scope inactive` | Preview cleanup of variants outside the active request. |
 
-Recording resolution is part of the scientific configuration. Sparse recording
-cannot recover discarded observations later: accumulate cumulative quantities
-during the simulation if their curves will be recorded sparsely. Checkpoints occur
-between protocol steps; an indivisible `fit()` or trial cannot resume midway.
+Cleanup is a dry run unless `--yes` is supplied. Scopes include analysis caches,
+checkpoints, inactive variants, selected runs, or all artifacts. Removing state
+prevents continuing those runs, even if their numerical results remain available.
+
+Recording controls which future analyses are possible. A cumulative metric needs
+the complete underlying trajectory; sparse observations cannot recover missing
+actions or rewards. Checkpoints occur between protocol steps, so a single long
+`fit()` or trial needs incremental support to resume within that operation.
 
 ## Documentation and development
 
-- [Configuration and custom components](docs/CONFIGURATION.md)
-- [Architecture and persistence guarantees](docs/ARCHITECTURE.md)
-- [Project goals and scope](docs/PROJECT_BRIEF.md)
+- [Configuration and extension guide](docs/CONFIGURATION.md)
+- [Architecture and artifact contracts](docs/ARCHITECTURE.md)
+- [Project goals](docs/PROJECT_BRIEF.md)
 - [Development workflow](docs/BUILD_WORKFLOW.md)
 - [Contributing](CONTRIBUTING.md)
 
-The source package is in `src/experiments_wo_stress/`, executable studies are in
-`examples/`, and behavior tests are in `tests/`. Generated outputs are excluded
-from version control.
+Keep code, documentation, and executable examples consistent. Run
+`python scripts/check_docs.py --examples --cli` alongside the relevant tests;
+this verifies mechanical references and supported examples, while review verifies
+scientific meaning. Generated experiments, caches, and build products stay out of
+version control.

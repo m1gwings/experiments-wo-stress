@@ -1,6 +1,8 @@
 """Reproducible numerical experiments with explicit state and independent analysis."""
 
 from .analysis import Summary, analyze
+from .artifacts import Instance, RunResult
+from .cleanup import clean_experiment
 from .components import (
     DataGenerator,
     Feedback,
@@ -24,16 +26,19 @@ __all__ = [
     "Feedback",
     "GridPlanner",
     "InteractionProtocol",
+    "Instance",
     "Metric",
     "MetricResult",
     "OfflineAlgorithm",
     "OnlineAlgorithm",
     "RunPlanner",
     "RunReport",
+    "RunResult",
     "RunSpec",
     "StateMixin",
     "Summary",
     "analyze",
+    "clean_experiment",
     "inspect_experiment",
     "load_config",
     "make_run_spec",

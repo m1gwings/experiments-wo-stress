@@ -6,7 +6,7 @@ import hashlib
 
 import numpy as np
 
-from .jobs import RunSpec, canonical_json
+from .jobs import _BUDGET_PROTOCOLS, RunSpec, canonical_json
 
 
 def make_rngs(spec: RunSpec) -> dict[str, np.random.Generator]:
@@ -16,18 +16,22 @@ def make_rngs(spec: RunSpec) -> dict[str, np.random.Generator]:
     Python hashes, or traversal positions. Component seeds override the root seed.
     """
     descriptions = {
-        name: {"type": getattr(spec, name).type, "params": getattr(spec, name).params}
+        name: {"type": getattr(spec, name).type, "params": dict(getattr(spec, name).params)}
         for name in ("algorithm", "data", "protocol")
     }
+    if spec.protocol.type in _BUDGET_PROTOCOLS:
+        descriptions["protocol"]["params"].pop("horizon", None)
     streams = {}
-    for name in descriptions:
-        component = getattr(spec, name)
+    for name in (*descriptions, "instance"):
+        component = spec.data if name == "instance" else getattr(spec, name)
         identity = {
             "version": 1,
             "stream": name,
             "group": spec.group,
             "repetition": spec.repetition,
-            "components": {"data": descriptions["data"]} if name == "data" else descriptions,
+            "components": {"data": descriptions["data"]}
+            if name in {"data", "instance"}
+            else descriptions,
         }
         digest = hashlib.sha256(canonical_json(identity).encode()).digest()
         words = np.frombuffer(digest, dtype="<u4").tolist()

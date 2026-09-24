@@ -22,11 +22,12 @@ from typing import Any
 import numpy as np
 import yaml
 
-from .components import construct, resolve_type
+from .components import construct, create_instance, resolve_type
 from .config import ExperimentConfig, load_config
 from .jobs import RunSpec, plan_runs
 from .rng import make_rngs
 from .storage import (
+    EXPERIMENT_SCHEMA_VERSION,
     SCHEMA_VERSION,
     Recorder,
     RunStore,
@@ -35,7 +36,9 @@ from .storage import (
     atomic_text,
     digest_file,
     fingerprint,
+    load_instance,
     read_json,
+    save_instance,
 )
 
 _STOP_EVENT: Any = threading.Event()
@@ -127,7 +130,11 @@ def _preflight(specs: list[RunSpec]) -> dict[str, str]:
             except ValueError:
                 signature = None
             if signature is not None:
-                signature.bind(rng=None, **component.params)
+                kwargs = {"rng": None, **component.params}
+                for injected in ("instance", "logger"):
+                    if injected in signature.parameters:
+                        kwargs[injected] = None
+                signature.bind(**kwargs)
         if spec.data.type in {"csv", "experiments_wo_stress.data:CSVDataGenerator"}:
             path = spec.data.params["path"]
             hash_source(f"input:{path}", path)
@@ -159,11 +166,16 @@ def _preflight(specs: list[RunSpec]) -> dict[str, str]:
 
 def _provenance(config: ExperimentConfig, sources: dict[str, str]) -> dict[str, Any]:
     package = Path(__file__).parent
-    implementation = {path.name: digest_file(path) for path in sorted(package.glob("*.py"))}
-    # Include adjacent project modules so changes in helper functions invalidate resume too.
+    simulation_modules = (
+        "artifacts.py",
+        "components.py",
+        "protocols.py",
+        "rng.py",
+        "runner.py",
+        "storage.py",
+    )
+    implementation = {name: digest_file(package / name) for name in simulation_modules}
     project = Path(config.source_dir)
-    for path in sorted(project.glob("*.py")):
-        sources[f"project:{path.name}"] = digest_file(path)
     for group in config.runs:
         if group.get("planner", "grid") != "grid":
             planner = group["planner"]
@@ -205,57 +217,132 @@ def _provenance(config: ExperimentConfig, sources: dict[str, str]) -> dict[str, 
     }
 
 
+def _component_sources(component: Any) -> dict[str, str]:
+    """Fingerprint defining/base modules and explicitly declared helper/input files."""
+    cls = resolve_type(component.type)
+    sources = {}
+    for base in getattr(cls, "__mro__", (cls,)):
+        if base is object:
+            continue
+        try:
+            source = inspect.getsourcefile(base)
+        except TypeError:
+            source = None
+        if source:
+            sources[f"module:{base.__module__}"] = digest_file(Path(source))
+            for dependency in getattr(base, "dependency_files", ()):
+                path = (Path(source).parent / dependency).resolve()
+                sources[f"dependency:{path}"] = digest_file(path)
+    for dependency in getattr(component, "dependencies", ()):
+        path = Path(dependency).resolve()
+        sources[f"dependency:{path}"] = digest_file(path)
+    if component.type in {"csv", "experiments_wo_stress.data:CSVDataGenerator"}:
+        path = Path(component.params["path"])
+        sources[f"input:{path}"] = digest_file(path)
+    if component.type in {"trial", "experiments_wo_stress.protocols:TrialProtocol"}:
+        function = resolve_type(component.params["function"])
+        source = inspect.getsourcefile(function)
+        if source:
+            sources[f"function:{component.params['function']}"] = digest_file(Path(source))
+    if component.type in {"gymnasium", "experiments_wo_stress.settings:GymnasiumAdapter"}:
+        import importlib.metadata
+
+        for parameter, default in (("factory", "gymnasium:make"), ("state_adapter", None)):
+            target = component.params.get(parameter, default)
+            if not target:
+                continue
+            factory = resolve_type(target)
+            for base in getattr(factory, "__mro__", (factory,)):
+                if base is object:
+                    continue
+                source = inspect.getsourcefile(base)
+                if source:
+                    sources[f"adapter:{target}:{base.__module__}"] = digest_file(Path(source))
+                    for dependency in getattr(base, "dependency_files", ()):
+                        path = (Path(source).parent / dependency).resolve()
+                        sources[f"dependency:{path}"] = digest_file(path)
+            package = target.split(":", 1)[0].split(".", 1)[0]
+            try:
+                sources[f"package:{package}"] = importlib.metadata.version(package)
+            except importlib.metadata.PackageNotFoundError:
+                pass
+    return sources
+
+
 def _prepare(
     root: Path, config: ExperimentConfig, specs: list[RunSpec], provenance: dict[str, Any]
-) -> None:
-    signature = fingerprint(config.simulation_dict())
-    code_signature = fingerprint(
-        {key: provenance[key] for key in ("implementation", "components", "environment")}
-    )
+) -> dict[str, str]:
+    """Select compatible retained variants; changing a request never deletes results."""
     path = root / "metadata.json"
     if path.exists():
         previous = read_json(path)
-        if previous.get("schema_version") != SCHEMA_VERSION:
-            raise ValueError("The output directory uses an incompatible artifact schema")
-        if previous["simulation_fingerprint"] != signature:
+        if previous.get("schema_version") != EXPERIMENT_SCHEMA_VERSION:
             raise ValueError(
-                "Configuration mismatch: use a new output directory for this experiment"
+                "Legacy output is readable for analysis; use a new directory for schema-2 execution"
             )
-        if previous["implementation_fingerprint"] != code_signature:
-            raise ValueError(
-                "Implementation/environment mismatch: use the original code or a new output directory"
-            )
-        if previous["run_ids"] != sorted(spec.run_id for spec in specs):
-            raise ValueError("Run plan mismatch in saved experiment metadata")
-    else:
-        # Existing unowned results are not adopted as a fresh experiment.
-        if any(path.name != ".lock" for path in root.iterdir()):
-            raise ValueError("Output directory is not empty and has no experiment metadata")
-        atomic_json(
-            path,
-            {
-                "schema_version": SCHEMA_VERSION,
-                "name": config.name,
-                "simulation_fingerprint": signature,
-                "implementation_fingerprint": code_signature,
-                "run_ids": sorted(spec.run_id for spec in specs),
-                "provenance": provenance,
-            },
-        )
-    atomic_text(root / "config.resolved.yml", yaml.safe_dump(config.to_dict(), sort_keys=False))
+    elif any(path.name != ".lock" for path in root.iterdir()):
+        raise ValueError("Output directory is not empty and has no experiment metadata")
+    locations = {}
+    requests = {}
+    recording = {key: config.recording[key] for key in ("every_steps", "fields")}
+    if recording["fields"] is not None:
+        recording["fields"] = sorted(recording["fields"])
+    source_cache = {}
     for spec in specs:
-        path = root / "runs" / spec.run_id / "metadata.json"
-        value = {
-            "schema_version": SCHEMA_VERSION,
-            "spec": spec.to_dict(),
-            "simulation_fingerprint": signature,
-            "implementation_fingerprint": code_signature,
+        sources = {}
+        extendable = spec.budget_steps is not None
+        for component in (spec.algorithm, spec.data, spec.protocol):
+            key = fingerprint(component.to_dict())
+            if key not in source_cache:
+                source_cache[key] = _component_sources(component)
+            sources.update(source_cache[key])
+            extendable = extendable and bool(
+                getattr(resolve_type(component.type), "supports_extension", False)
+            )
+        scientific = spec.to_dict()
+        scientific.pop("budget_steps", None)
+        code_signature = fingerprint(
+            {
+                "implementation": provenance["implementation"],
+                "components": sources,
+                "environment": provenance["environment"],
+            }
+        )
+        identity = {
+            "science": scientific,
+            "code": code_signature,
+            "recording": recording,
+            "budget": None if extendable else spec.budget_steps,
         }
-        if path.exists():
-            if read_json(path) != value:
-                raise ValueError(f"Run metadata mismatch for {spec.run_id}")
-        else:
-            atomic_json(path, value)
+        storage_id = fingerprint(identity)[:32]
+        locations[spec.run_id] = storage_id
+        requests[storage_id] = spec.to_dict()
+        run_path = root / "runs" / storage_id / "metadata.json"
+        if not run_path.exists():
+            atomic_json(
+                run_path,
+                {
+                    "schema_version": SCHEMA_VERSION,
+                    "spec": spec.to_dict(),
+                    "identity": identity,
+                    "extendable": extendable,
+                    "implementation_fingerprint": code_signature,
+                },
+            )
+        elif read_json(run_path).get("identity") != identity:
+            raise StorageError(f"Stored identity mismatch for {storage_id}")
+    request = {
+        "schema_version": EXPERIMENT_SCHEMA_VERSION,
+        "name": config.name,
+        "run_ids": sorted(requests),
+        "requests": requests,
+        "provenance": provenance,
+    }
+    request_id = fingerprint({"requests": requests, "recording": recording})
+    atomic_json(root / "requests" / f"{request_id}.json", request)
+    atomic_json(path, request)
+    atomic_text(root / "config.resolved.yml", yaml.safe_dump(config.to_dict(), sort_keys=False))
+    return locations
 
 
 def _initialize_worker(event: Any) -> None:
@@ -270,73 +357,119 @@ def _execute(
     execution: dict[str, Any],
     recording: dict[str, Any],
     max_steps: int | None,
+    storage_id: str,
 ) -> tuple[str, str, str | None]:
+    from .logging import run_logging
+
     spec = RunSpec.from_dict(spec_dict)
     store = None
-    try:
-        store = RunStore(
-            Path(root) / "runs" / spec.run_id,
-            compression=execution.get("compression", False),
-            keep_checkpoints=execution.get("keep_checkpoints", 2),
-        )
-        if store.completed():
-            return spec.run_id, "skipped", None
-        rngs = make_rngs(spec)
-        algorithm = construct(spec.algorithm, rngs["algorithm"])
-        data = construct(spec.data, rngs["data"])
-        protocol = construct(spec.protocol, rngs["protocol"])
-        restored, manifest, restored_step = store.restore()
-        components = {"algorithm": algorithm, "data": data, "protocol": protocol}
-        if restored is None:
-            protocol.initialize(algorithm, data)
-        else:
-            for name, component in components.items():
-                component.load_state_dict(restored[name])
-            for name, rng in rngs.items():
-                rng.bit_generator.state = restored["rngs"][name]
-            if protocol.step != restored_step:
-                raise StorageError("Checkpoint protocol step does not match result boundary")
-        recorder = Recorder(store, recording, manifest)
-        checkpoint_time = time.monotonic()
-        checkpoint_step = protocol.step
-        started_step = protocol.step
+    components = {}
+    with run_logging(Path(root) / "runs" / storage_id, spec.run_id, execution) as logger:
+        try:
+            store = RunStore(
+                Path(root) / "runs" / storage_id,
+                compression=execution.get("compression", False),
+                keep_checkpoints=execution.get("keep_checkpoints", 2),
+            )
+            metadata_path = store.directory / "metadata.json"
+            metadata = read_json(metadata_path)
+            if store.completion(spec.budget_steps) is not None:
+                logger.info("Reusing completed results")
+                return spec.run_id, "skipped", None
+            rngs = make_rngs(spec)
+            if metadata.get("instance_id"):
+                instance = load_instance(Path(root), metadata["instance_id"])
+            else:
+                instance = create_instance(spec.data, rngs["instance"])
+                metadata["instance_id"] = save_instance(
+                    Path(root), instance, compression=store.compression
+                )
+                atomic_json(metadata_path, metadata)
+            algorithm = construct(
+                spec.algorithm, rngs["algorithm"], logger=logger.getChild("algorithm")
+            )
+            components["algorithm"] = algorithm
+            data = construct(
+                spec.data, rngs["data"], instance=instance, logger=logger.getChild("data")
+            )
+            components["data"] = data
+            protocol = construct(
+                spec.protocol, rngs["protocol"], logger=logger.getChild("protocol")
+            )
+            components["protocol"] = protocol
+            if spec.budget_steps is not None:
+                setter = getattr(protocol, "set_budget", None)
+                if not callable(setter):
+                    raise ValueError("A budget requires protocol.set_budget(steps)")
+                setter(spec.budget_steps)
+            restored, manifest, restored_step = store.restore()
+            if restored is None:
+                protocol.initialize(algorithm, data)
+            else:
+                for name, component in components.items():
+                    component.load_state_dict(restored[name])
+                for name, rng in rngs.items():
+                    rng.bit_generator.state = restored["rngs"][name]
+                if protocol.step != restored_step:
+                    raise StorageError("Checkpoint protocol step does not match result boundary")
+            logger.info(
+                "Executing from step %s to %s", protocol.step, spec.budget_steps or "completion"
+            )
+            recorder = Recorder(store, recording, manifest)
+            checkpoint_time = time.monotonic()
+            checkpoint_step = protocol.step
+            started_step = protocol.step
 
-        def save(status: str = "running") -> None:
-            nonlocal checkpoint_time, checkpoint_step
-            recorder.flush()
-            state = {name: component.state_dict() for name, component in components.items()}
-            state["rngs"] = {name: rng.bit_generator.state for name, rng in rngs.items()}
-            store.checkpoint(state, recorder.manifest, protocol.step, status=status)
-            checkpoint_time, checkpoint_step = time.monotonic(), protocol.step
+            def save(status: str = "running") -> None:
+                nonlocal checkpoint_time, checkpoint_step
+                recorder.flush()
+                state = {name: component.state_dict() for name, component in components.items()}
+                state["rngs"] = {name: rng.bit_generator.state for name, rng in rngs.items()}
+                store.checkpoint(state, recorder.manifest, protocol.step, status=status)
+                checkpoint_time, checkpoint_step = time.monotonic(), protocol.step
+                logger.debug("Checkpoint committed at step %s", protocol.step)
 
-        while not protocol.is_finished():
-            if _STOP_EVENT.is_set() or (
-                max_steps is not None and protocol.step - started_step >= max_steps
-            ):
-                save("paused")
-                return spec.run_id, "paused", None
-            previous_step = protocol.step
-            observations = protocol.advance(algorithm, data)
-            if protocol.step != previous_step + 1:
-                raise ValueError("Protocol.advance() must increment step by exactly one")
-            recorder.record(protocol.step, observations, final=protocol.is_finished())
-            seconds = execution.get("checkpoint_seconds", 120)
-            steps = execution.get("checkpoint_steps")
-            due = seconds is not None and time.monotonic() - checkpoint_time >= seconds
-            due = due or (steps is not None and protocol.step - checkpoint_step >= steps)
-            if due and not protocol.is_finished():
-                save()
-        recorder.flush()
-        store.finish(recorder.manifest, protocol.step)
-        return spec.run_id, "completed", None
-    except Exception as exc:
-        error = f"{type(exc).__name__}: {exc}"
-        if store is not None and store.progress.get("status") != "completed":
-            try:
-                store.fail(error, traceback.format_exc())
-            except OSError:
-                pass
-        return spec.run_id, "failed", error
+            while not protocol.is_finished():
+                if _STOP_EVENT.is_set() or (
+                    max_steps is not None and protocol.step - started_step >= max_steps
+                ):
+                    save("paused")
+                    logger.info("Paused at step %s", protocol.step)
+                    return spec.run_id, "paused", None
+                previous_step = protocol.step
+                observations = protocol.advance(algorithm, data)
+                if protocol.step != previous_step + 1:
+                    raise ValueError("Protocol.advance() must increment step by exactly one")
+                # A request-specific final sample would break prefix invariance when extended.
+                final = protocol.is_finished() and not metadata["extendable"]
+                recorder.record(protocol.step, observations, final=final)
+                seconds = execution.get("checkpoint_seconds", 120)
+                steps = execution.get("checkpoint_steps")
+                due = seconds is not None and time.monotonic() - checkpoint_time >= seconds
+                due = due or (steps is not None and protocol.step - checkpoint_step >= steps)
+                if due and not protocol.is_finished():
+                    save()
+            save()
+            store.finish(recorder.manifest, protocol.step)
+            logger.info("Completed at step %s", protocol.step)
+            return spec.run_id, "completed", None
+        except Exception as exc:
+            error = f"{type(exc).__name__}: {exc}"
+            logger.exception("Run failed: %s", error)
+            if store is not None:
+                try:
+                    store.fail(error, traceback.format_exc())
+                except OSError:
+                    pass
+            return spec.run_id, "failed", error
+        finally:
+            for component in components.values():
+                close = getattr(component, "close", None)
+                if callable(close):
+                    try:
+                        close()
+                    except Exception:
+                        logger.exception("Component cleanup failed")
 
 
 def run_experiment(
@@ -376,7 +509,7 @@ def run_experiment(
             signal.signal(signum, lambda *_: _STOP_EVENT.set())
     try:
         with _experiment_lock(root):
-            _prepare(root, config, specs, provenance)
+            locations = _prepare(root, config, specs, provenance)
             if workers == 1:
                 for index, spec in enumerate(specs):
                     if _STOP_EVENT.is_set():
@@ -384,7 +517,12 @@ def run_experiment(
                         break
                     report.add(
                         _execute(
-                            spec.to_dict(), str(root), execution, dict(config.recording), max_steps
+                            spec.to_dict(),
+                            str(root),
+                            execution,
+                            dict(config.recording),
+                            max_steps,
+                            locations[spec.run_id],
                         )
                     )
             else:
@@ -408,6 +546,7 @@ def run_experiment(
                             execution,
                             dict(config.recording),
                             max_steps,
+                            locations[spec.run_id],
                         )
                         active[future] = spec.run_id
                         return True
@@ -443,11 +582,28 @@ def inspect_experiment(output_dir: str | Path) -> dict[str, Any]:
         try:
             progress = read_json(path) if path.exists() else {"status": "pending", "step": 0}
             status = progress["status"]
-            if status == "completed":
-                RunStore(path.parent).completed()
+            if path.exists():
+                target = metadata.get("requests", {}).get(run_id, {}).get("budget_steps")
+                completion = RunStore(path.parent).completion(target)
+                if completion is not None:
+                    progress = {
+                        **progress,
+                        "stored_status": status,
+                        "stored_step": progress["step"],
+                        "status": "completed",
+                        "step": target or completion["step"],
+                    }
+                    status = "completed"
             counts[status] += 1
             runs.append({"run_id": run_id, **progress})
         except (StorageError, KeyError, ValueError) as exc:
             counts["corrupt"] += 1
             runs.append({"run_id": run_id, "status": "corrupt", "error": str(exc)})
-    return {"name": metadata["name"], "counts": counts, "runs": runs}
+    variants = sum(1 for path in (root / "runs").iterdir() if path.is_dir())
+    return {
+        "name": metadata["name"],
+        "counts": counts,
+        "runs": runs,
+        "retained_variants": variants,
+        "active_variants": len(metadata["run_ids"]),
+    }
