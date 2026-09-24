@@ -1,39 +1,71 @@
-# Collaborative build workflow
+# Development workflow
 
-Status: proposal for discussion, 2026-09-24.
+## Start from an experiment
 
-## Phase 1 — Agree on the contract in Markdown
+Use a concrete research need to guide changes. The current contracts are recorded
+in [ARCHITECTURE.md](ARCHITECTURE.md) and [CONFIGURATION.md](CONFIGURATION.md).
+When an authorized feature changes those contracts, describe its scientific inputs,
+interaction, stored observations, resume behavior, and resulting figure before
+implementing it. Keep unrelated design proposals out of the operational docs.
 
-Use `PROJECT_BRIEF.md` for goals and acceptance criteria, `ARCHITECTURE_DRAFT.md` for boundaries and data flow, and this file for the work sequence. Chat about one open question at a time and edit the documents to record conclusions. Mark unresolved choices explicitly rather than letting an implementing agent decide them implicitly.
+The initial implementation is complete enough for local end-to-end studies. The
+next milestone is adapting a real paper experiment and using the experience to
+refine the experimental API.
 
-Select one genuine paper experiment as the design example. Write a short walkthrough showing the experiment's inputs, interaction protocol, repetitions, stored measurements, and final figure. This is the strongest test of whether the proposed API is small enough.
+## Implement and verify
 
-## Phase 2 — Freeze a small v0 implementation brief
+Keep the smallest useful vertical slice: configuration through execution to saved
+results and analysis. For persistence changes, compare uninterrupted execution
+with interrupted/resumed execution, including changed worker counts. For analysis
+changes, work from existing artifacts and avoid requiring simulation imports.
 
-Once the example is agreed, specify the public API, config schema, artifact layout, and exact semantics of seeds and resume. Convert open questions into recorded decisions. Define one end-to-end acceptance check: an interrupted run resumes without changing completed results, and all requested figure formats can be regenerated from saved data.
+Install the development and plotting extras in a virtual environment:
 
-Only then add a concise `AGENTS.md` in the repository: point Codex to the agreed documents; state the current milestone and lightweight verification commands; require discussion before changing the public contract. The design documents remain the source of product requirements; `AGENTS.md` supplies implementation workflow.
+```bash
+python -m pip install -e '.[dev,plot]'
+```
 
-## Phase 3 — Implement one vertical slice
+Run the full verification set for substantial implementation changes:
 
-Create the package and example in one repository. Implement config loading, deterministic job planning, sequential execution, committed results, job-level resume, aggregation, and one line figure. Exercise it with two algorithms and multiple seeds. Test the behaviors with meaningful failure risk: seed invariance, interruption/resume, config mismatch, and figure regeneration without rerunning.
+```bash
+python -m pytest
+ruff check src tests examples
+ruff format --check src tests examples
+python -m build --no-isolation
+```
 
-Add local process parallelism after sequential correctness is demonstrated, then check that a different worker count yields identical per-job outputs. Add more protocol conveniences only when the example exposes a real repetition.
+Tests cover stable run planning, independent RNG streams, configuration validation,
+sequential/parallel equivalence, interruption, checkpoint recovery, artifact and
+input mismatches, aggregation, figure export, and CLI behavior. Add tests for
+concrete new risks, and use focused checks for smaller changes.
 
-## Phase 4 — Use it in a paper and release
+## Exercise the complete example
 
-Adapt one existing paper experiment to the package. Record friction and simplify the API. Tag a version and pin it in that paper repository. Decide on a package name, license, Python support range, and PyPI publication when the first paper workflow is convincing.
+Use a new output directory if one from a previous code version already exists:
 
-## Suggested Codex prompts
+```bash
+ews plan examples/sequential_study/experiment.yml
+ews run examples/sequential_study/experiment.yml --output outputs/verification --max-steps 250
+ews inspect outputs/verification
+ews run examples/sequential_study/experiment.yml --output outputs/verification --workers 2
+ews run examples/sequential_study/experiment.yml --output outputs/verification
+ews plot examples/sequential_study/experiment.yml --output outputs/verification
+ews run examples/offline_csv/experiment.yml --output outputs/offline-verification
+ews analyze examples/offline_csv/experiment.yml --output outputs/offline-verification
+```
 
-**Design session (no implementation):**
+The first run pauses each trial after 250 new steps. The second continues it with
+two workers. The third validates and skips completed results. Inspect the generated
+figures when changing the exporter; all requested formats should contain the same
+curves, labels, and uncertainty semantics. TikZ compilation is an optional local
+check and is not required for source export.
 
-> Read `docs/PROJECT_BRIEF.md`, `docs/ARCHITECTURE_DRAFT.md`, and `docs/BUILD_WORKFLOW.md`. Help me refine the architecture using a real paper experiment. Identify ambiguities and propose the smallest public API. Edit only the design Markdown files after we agree on each decision; do not implement the library yet.
+## Review and deliver
 
-**First implementation session (after agreement):**
+Review the final behavior and documentation together. Keep generated artifacts out
+of commits, describe validation in the PR, and state material limitations such as
+an indivisible offline step or missing raw observations. Preserve a clear distinction
+between implemented features and possible future extensions.
 
-> Read `AGENTS.md` and the approved design documents. Implement only the first vertical slice and its example. Preserve the documented seed and resume semantics. Run the specified acceptance checks, summarize deviations from the design, and show the diff.
-
-## Where files live
-
-During discussion, these files may be kept outside a repository. When the repository is created, place them under `docs/`, add `AGENTS.md`, and commit the reviewed versions before implementation. Each paper keeps its own code, configs, results policy, and dependency lock or version pin.
+After a real paper validates the workflow, the project owner can choose licensing,
+versioning, and publication. Implementation work alone does not authorize a release.

@@ -1,0 +1,33 @@
+name: offline_mean_estimation
+seed: 2026
+
+runs:
+  - name: measurements
+    repetitions: 1
+    protocol:
+      type: offline
+    data:
+      type: csv
+      params:
+        path: observations.csv
+        skip_header: 1
+    algorithms:
+      - name: sample_mean
+        type: offline_paper:MeanEstimator
+
+analysis:
+  metrics:
+    - name: mean
+      type: field
+      params:
+        field: mean
+    - name: variance
+      type: field
+      params:
+        field: variance
+  aggregator:
+    type: repeated_runs
+    group_by: [algorithm.name]
+    reduce_over: repetition
+    summary: mean
+    uncertainty: none

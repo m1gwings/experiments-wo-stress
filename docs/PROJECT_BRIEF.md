@@ -1,51 +1,64 @@
-# Experiments W/O Stress — project brief (draft)
-
-Status: discussion draft, 2026-09-24. This document describes the goal; it is not an implementation instruction.
+# Project brief
 
 ## Purpose
 
-Build a lightweight Python library for numerical experiments in theory-oriented machine learning papers. A researcher should spend most of their time specifying an instance, an algorithm, a feedback process when needed, and the figures that answer the paper's questions. The library handles recurring experiment infrastructure.
+Experiments W/O Stress helps researchers run numerical experiments for
+theory-oriented machine learning papers. A researcher specifies instances,
+algorithms, observable feedback, measurements, and figures. The library handles
+the repeated infrastructure needed to execute and inspect the study.
 
-Typical target: moderate simulations with many independent instances, algorithms, and seeds, run on a laptop or a modest multicore machine. The design should allow growth to larger runs without making the first version a cluster framework.
-
-## Repeated problems to solve
-
-- Deterministic, isolated random streams across instances, algorithms, repetitions, and workers.
-- A clear interaction loop for sequential experiments, without imposing that loop on every numerical study.
-- Configuration parsing and validation; a saved snapshot of the effective configuration.
-- Independent work units that can be skipped after success, retried after failure, and resumed after interruption.
-- Raw numerical results and metadata that survive plot changes.
-- Aggregation and export of publication figures to PDF, JPG, and TikZ/PGFPlots source.
-- A simple way to use the library from a paper repository, including an example that an LLM can adapt.
+The target is moderate simulations on a laptop or a modest multicore machine.
+Efficiency matters: use bounded worker submission, buffered numerical storage,
+explicit checkpoint state, and analysis that does not retain every repetition.
 
 ## Design criteria
 
-1. **Reproducibility:** a run records its configuration, seeds, software versions, and code revision when available. Re-running the same job produces the same result under the same code and environment, including when parallel worker count changes.
-2. **Safe resumption:** completed jobs are recognized from validated outputs; partial outputs do not count as completed. An incompatible configuration does not silently reuse old results.
-3. **Small authoring surface:** simple studies should work with a Python trial function. Interactive studies may use explicit environment/algorithm protocols. Users should not have to subclass a large framework.
-4. **Separation:** simulation writes raw data; plotting reads saved data. Changing a figure must not rerun simulations.
-5. **Proportionate dependencies:** numeric computing can use NumPy; plotting and other formats can be optional extras. Avoid mandatory distributed services or databases initially.
-6. **Inspectability:** files, configuration, and errors should be easy to inspect; the CLI should report which jobs ran, were skipped, or failed.
+1. **Reproducibility.** Record effective configuration, seeds, code provenance, and
+   software versions. Equivalent runs produce the same results under the same code,
+   inputs, and environment, including when worker count changes.
+2. **Recoverability.** Skip validated completed runs, resume unfinished runs at safe
+   protocol boundaries, and report incompatible or corrupt artifacts explicitly.
+3. **Small scientific interface.** Ordinary Python classes implement the capabilities
+   a protocol needs. A callable trial also supports a complete custom computation.
+4. **Independent analysis.** Save numerical results so researchers can change metrics
+   and figures without repeating simulation, provided the required observations exist.
+5. **Proportionate infrastructure.** NumPy and PyYAML are core dependencies; Matplotlib
+   is optional. Execution and storage remain local.
+6. **Inspectability.** Configuration, run progress, numerical arrays, and tracebacks
+   remain accessible through ordinary files and a small CLI.
 
-## Intended user journey
+## Current implementation
 
-1. Create a paper-specific repository and install a pinned library version.
-2. Define a trial or interactive environment and algorithms in that repository.
-3. Write a configuration specifying the instance family, algorithms, budgets, repetitions, and metrics.
-4. Run the experiment; stop and resume it; optionally use local parallel workers.
-5. Generate figures from stored data, and include the PDF or TikZ output in the paper.
+The experimental package supports explicit algorithms, stateful data generators,
+offline/online/trial protocols, grids and custom planners, repeated runs, local
+processes, checkpoints, and saved-data analysis. It exports PDF, JPG, and editable
+TikZ/PGFPlots figures.
 
-## First acceptance example
+The [sequential study](../examples/sequential_study/README.md) compares two algorithms
+on three synthetic Gaussian bandit sizes with 20 repetitions each. Tests verify
+that interruption and resumption with a different worker count preserve complete
+numerical results, and that figures regenerate without importing simulation code.
+The [offline CSV study](../examples/offline_csv/README.md) verifies stored-data use
+through the same generator interface.
 
-A small sequential learning experiment compares two algorithms across several problem sizes and independent seeds. The researcher can interrupt a run halfway, restart with a different number of workers, and obtain the same complete set of per-job results. A plotting command generates a PDF, JPG, and editable TikZ/PGFPlots curve from those saved results. The example also documents how to add a new algorithm and a custom feedback rule.
+These are acceptance examples, not a claim that the public API has been validated
+in a published paper. The next product milestone is adoption in a genuine research
+project, recording friction and simplifying the interface before declaring it stable.
 
-## Out of scope for the initial release
+## Researcher workflow
 
-- A distributed scheduler, web dashboard, or hosted results service.
-- A catalog of research algorithms or benchmarks.
-- Automatic support for every plotting primitive or arbitrary Python object serialization.
-- A framework-specific dependency in each paper's public code beyond the library itself.
+1. Install a pinned version or commit in the paper repository.
+2. Define scientific components and explicit checkpoint state in Python.
+3. Write YAML specifying parameter combinations, repetitions, recording, and analysis.
+4. Execute locally; inspect, interrupt, and resume as needed.
+5. Regenerate summary tables and publication figures from the saved results.
 
-## Distribution assumption to review
+## Scope limits
 
-Develop a standalone Python package in a GitHub repository. Keep one canonical example paper project. Use tagged versions or pinned commits in paper repositories; consider PyPI after a real paper experiment validates the API.
+Distributed scheduling, dashboards, hosted storage, a benchmark catalog, arbitrary
+Python object serialization, and arbitrary checkpoints inside a function are outside
+the initial scope. Default figures cover numerical curves, parameter panels, and
+uncertainty; custom plotting remains an extension point.
+
+The source lives in a standalone GitHub repository. A stable release, license
+choice, and package-index publication remain separate decisions.

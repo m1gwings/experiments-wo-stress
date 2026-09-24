@@ -1,0 +1,60 @@
+name: gaussian_bandit_comparison
+seed: 2026
+
+runs:
+  - name: main
+    planner: grid
+    repetitions: 20
+    protocol:
+      type: online
+      params:
+        horizon: 1000
+    data:
+      type: paper:GaussianBandit
+      params:
+        n_arms: 10
+        noise_std: 0.1
+    algorithms:
+      - name: ucb
+        type: paper:UCB
+        params:
+          exploration: 0.1
+      - name: epsilon_greedy
+        type: paper:EpsilonGreedy
+        params:
+          epsilon: 0.1
+    grid:
+      data.params.n_arms: [10, 20, 50]
+
+execution:
+  workers: 1
+  checkpoint_seconds: 120
+  keep_checkpoints: 2
+  compression: false
+
+recording:
+  every_steps: 10
+  fields: [action, reward, regret]
+  buffer_bytes: 16777216
+
+analysis:
+  metrics:
+    - name: regret
+      type: field
+      params:
+        field: regret
+  aggregator:
+    type: repeated_runs
+    group_by: [data.params.n_arms, algorithm.name]
+    reduce_over: repetition
+    summary: mean
+    uncertainty: standard_error
+  figures:
+    - type: line
+      metric: regret
+      x: step
+      color: algorithm.name
+      panel: data.params.n_arms
+      xlabel: Round
+      ylabel: Cumulative pseudo-regret
+      formats: [pdf, jpg, tikz]
