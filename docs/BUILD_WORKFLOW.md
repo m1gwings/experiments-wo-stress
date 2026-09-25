@@ -53,20 +53,27 @@ the documentation check; executable example edits need focused execution tests.
 For an end-to-end acceptance run, use a fresh output directory:
 
 ```bash
-ews plan examples/sequential_study/experiment.yml
 ews run examples/sequential_study/experiment.yml --output outputs/verification --max-steps 250
 ews inspect outputs/verification
-ews build examples/sequential_study/experiment.yml --output outputs/verification --workers 2
-ews build examples/sequential_study/experiment.yml --output outputs/verification
+ews run examples/sequential_study/experiment.yml --output outputs/verification --workers 2
+ews run examples/sequential_study/experiment.yml --output outputs/verification
 ews run examples/offline_csv/experiment.yml --output outputs/offline-verification
-ews analyze examples/offline_csv/experiment.yml --output outputs/offline-verification
 ```
 
-The paused run should resume with two workers; the second build should reuse
-completed runs and analysis. Inspect logs and figures when those outputs are
-affected. To test extension, increase `budget.steps` in a temporary
-configuration beside its `experiment_code/` package and compare the extended
+The paused run should resume with two workers and then produce its configured
+analysis and figures. The next invocation should reuse completed runs and
+analysis; the offline run should also produce its configured summaries.
+Inspect logs and figures when those outputs are affected. To test extension,
+increase `budget.steps` in a temporary configuration beside its `experiment_code/`
+package and compare the extended
 result with a fresh run at the larger budget. Do not commit temporary output.
+
+For an optional preview of study size, use
+`ews count-runs examples/sequential_study/experiment.yml`. You do not need to
+invoke it before `run`. After changing metrics or aggregation, use `ews analyze`
+with the same configuration and output directory to recompute from saved results.
+After changing figure settings, use `ews plot` to regenerate figures from saved
+results. Neither command schedules simulations.
 
 The separate container check builds the deployment template, then exercises
 non-root execution, a persistent mount, pause/resume, inspection, TikZ export,

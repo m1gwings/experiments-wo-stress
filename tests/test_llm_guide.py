@@ -15,7 +15,7 @@ class StandaloneGuideTests(unittest.TestCase):
     """Treat the guide's marked code blocks as a complete external research project."""
 
     def test_copyable_study_executes_resumes_analyzes_and_reuses(self) -> None:
-        """Copy only documented files, run their checks, and build/reuse the stated outputs."""
+        """Copy documented files, run their checks, and execute/reuse the stated outputs."""
         guide = Path(__file__).resolve().parents[1] / "docs" / "LLM_GUIDE.md"
         # File markers are the contract for what a reader must copy from the guide.
         snippets = dict(
@@ -50,12 +50,13 @@ class StandaloneGuideTests(unittest.TestCase):
             )
             self.assertEqual(verification.returncode, 0, verification.stdout + verification.stderr)
             self.assertIn("Direct and resumed results match", verification.stdout)
-            # The first build executes all runs; the second must reuse them and reanalyze.
+            # Direct run needs no preliminary counting or separate analysis command.
+            # Its second invocation must reuse completed runs and derived caches.
             command = [
                 sys.executable,
                 "-m",
                 "experiments_wo_stress",
-                "build",
+                "run",
                 "experiment.yml",
                 "--output",
                 "outputs/study",

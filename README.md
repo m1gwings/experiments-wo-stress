@@ -13,16 +13,18 @@ explicit seeding of each component, *etc.*.
 - **A study in YAML.** Define algorithms, parameter grids, repetitions,
   recording, metrics, and figures in a version-controlled configuration.
 - **Reproducible local execution.** Run independent simulations with explicit
-  random streams, one worker or a small process pool.
+  random streams, one worker or a small process pool, with optional exclusive
+  GPU assignments within an invocation.
 - **Checkpoints and reuse.** Resume interrupted work and reuse compatible runs
-  and analysis when you return to a study.
+  and analysis when you return to a study. NumPy checkpoints work by default;
+  custom backends can serialize native framework state or split large payloads.
 - **Several interaction styles.** Use built-in online, offline, trial, or
   reinforcement-learning protocols with your own scientific components. Bandit,
   CSV, and Gymnasium data helpers are available.
 - **Analysis after execution.** Compute metrics from saved observations and
   instances, aggregate repetitions, and export PDF, JPG, or editable TikZ
   figures.
-- **Operational tools.** Plan and inspect runs from the CLI, receive optional
+- **Operational tools.** Count and inspect runs from the CLI, receive optional
   Discord progress messages, and use the same workflow on a Linux VM.
 
 ## Install
@@ -89,24 +91,75 @@ bandit and learning rules; the library handles execution and storage. Recorded
 actions and rewards, together with the saved bandit instance, support regret
 analysis afterward.
 
-From the repository root, inspect the plan, execute the study, and inspect its
-output:
+From the repository root, optionally check the run count, then run the study:
 
 ```bash
-ews plan examples/sequential_study/experiment.yml
-ews build examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
+# Optional: check the run count before launching.
+ews count-runs examples/sequential_study/experiment.yml
+ews run examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
+```
+
+`run` executes or resumes the simulations, then produces configured analysis
+and figures once all requested runs have completed or been reused. Figures appear
+in `outputs/bandits/analysis/figures/`. Failed, paused, or interrupted execution
+leaves analysis for a later successful invocation. Compatible work is reused
+when you run the command again.
+
+`count-runs` validates configuration and returns only the study name and run count, here
+`{"name": "gaussian_bandit_comparison", "runs": 120}`. Counts combine grid
+combinations × algorithms × repetitions within each group, summed across groups;
+they help estimate cost from a representative run. This check is never required
+before `run`.
+
+With no analysis configured, `run` performs execution only. A metrics-only
+configuration produces summaries; configured figures are exported after their
+required analysis completes.
+
+Use `ews analyze` or `ews plot` to revise metrics or figures from saved data after
+expensive simulations. Neither reruns the simulations; `plot` computes or reuses
+the analysis it needs. The [configuration guide](docs/CONFIGURATION.md) explains
+recording, budgets, and reuse in detail.
+
+To inspect saved status without running anything:
+
+```bash
 ews inspect outputs/bandits
 ```
 
-`plan` validates and expands the study without running it. `build` runs the
-simulations and produces the configured analysis and figures in
-`outputs/bandits/analysis/figures/`. Compatible work is reused on a later build.
-Use `ews run` when you want execution alone, then `ews analyze` or `ews plot` to
-work with saved results. The [configuration guide](docs/CONFIGURATION.md)
-explains recording, budgets, and reuse in detail.
-
 The [offline CSV example](examples/offline_csv/README.md) uses a stored dataset
 and performs one estimator fit per run.
+
+Ordinary CPU experiments require no GPU configuration. For GPU study components,
+assign one GPU to each worker:
+
+```yaml
+execution:
+  workers: 2
+  gpu_ids: [0, 1]
+```
+
+Each GPU worker is a fresh spawned process, even with one worker. It sees only
+its assigned GPU through `CUDA_VISIBLE_DEVICES`, established before study imports;
+the algorithm uses its local device, normally `cuda:0`. Worker count must equal
+the number of distinct GPU IDs, and `CUDA_VISIBLE_DEVICES` must be unset before
+launch. EWS manages visibility without importing a GPU framework. See
+[GPU execution](docs/CONFIGURATION.md#gpu-execution) for validation and scope.
+
+Checkpoint serialization is also an execution setting. Ordinary NumPy studies
+need no backend configuration. A paper can supply a backend when its model state
+needs a native or multiple-file representation:
+
+```yaml
+execution:
+  checkpoint_backend:
+    type: experiment_code.checkpointing:MyBackend
+    params: {}
+```
+
+The backend saves and loads logical state; EWS still owns complete-step
+checkpoint boundaries, checksums, atomic publication, recovery, and retention.
+See [checkpoint backends](docs/CONFIGURATION.md#checkpoint-backends) for the
+interface and a small implementation example.
 
 ## Suggested setup
 
@@ -151,7 +204,8 @@ and delivery behavior.
 
 ## Python API
 
-The same study can be run from Python:
+From Python, call `run_experiment` for execution and `plot` for analysis and
+figures:
 
 ```python
 from experiments_wo_stress import load_config, run_experiment
@@ -165,18 +219,18 @@ if __name__ == "__main__":
         plot(config, "outputs/bandits")
 ```
 
-The main guard is needed when starting multiple worker processes.
+The main guard is needed for multiple CPU workers and for any GPU execution,
+including one GPU worker.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `ews plan CONFIG` | Validate the configuration and show its runs. |
-| `ews build CONFIG --output DIR` | Execute the study and produce configured analysis. |
-| `ews run CONFIG --output DIR` | Execute or resume runs. |
-| `ews inspect DIR` | Inspect stored status and artifacts. |
+| `ews count-runs CONFIG` | Optionally validate configuration and count runs without executing them. |
+| `ews run CONFIG --output DIR` | Execute or resume, then produce configured analysis and figures after successful completion. |
 | `ews analyze CONFIG --output DIR` | Compute or reuse metrics and summaries. |
-| `ews plot CONFIG --output DIR` | Produce configured figures from analysis. |
+| `ews plot CONFIG --output DIR` | Regenerate configured figures from saved results. |
+| `ews inspect DIR` | Read stored status and validate completed artifacts without executing runs. |
 | `ews clean DIR --scope inactive` | Preview cleanup of retained artifacts. |
 
 ## Documentation and development

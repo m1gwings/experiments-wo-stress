@@ -103,9 +103,12 @@ instance without reconstructing a generator or relying on its implementation.
 
 Constructors receive `rng=` and configured parameters. `rng` is reserved.
 Stateful objects implement `state_dict()` and `load_state_dict(state)` with all
-changing values needed to continue. Supported state includes numerical arrays,
-ordinary scalars, lists, tuples, and string-keyed mappings. The library saves RNG
-states separately. `StateMixin` supplies empty state for stateless components.
+changing values needed to continue. The default checkpoint backend supports
+numerical NumPy arrays, ordinary scalars, lists, tuples, and string-keyed mappings.
+A [custom backend](#checkpoint-backends) can support native framework values
+without a mandatory NumPy conversion in the component. EWS includes its injected
+RNG states alongside component state. `StateMixin` supplies empty state for
+stateless components.
 
 Each protocol advance completes one logical step and increments `step` once.
 Initialization runs only for a fresh execution, so restored components must recover
@@ -222,13 +225,18 @@ recording:
   buffer_bytes: 16777216
 ```
 
-`--workers` overrides the worker setting. One worker executes sequentially in the
-current process. Python scripts launching multiple workers need the usual
-`if __name__ == "__main__":` guard.
+`--workers` and the Python API's `workers=` override the worker setting. Ordinary
+CPU experiments require no GPU configuration: with `gpu_ids` omitted, one worker
+executes sequentially in the current process and multiple workers use spawned
+processes. Python scripts starting process workers need the usual
+`if __name__ == "__main__":` guard. GPU execution also needs this guard with one
+worker.
 
 Checkpoints use time and step triggers; `null` disables either trigger.
 A pause, graceful interruption, or completion also saves state. Compression trades
-CPU time for disk space. See [checkpoint recovery](ARCHITECTURE.md#checkpoints-completion-and-interruption)
+CPU time for disk space; `execution.compression` controls recorded arrays and the
+default checkpoint backend unless that backend has an explicit compression
+parameter. See [checkpoint recovery](ARCHITECTURE.md#checkpoints-completion-and-interruption)
 for commit boundaries and durability.
 
 Run components receive a standard Python logger as `self.logger`. Use parameterized
@@ -254,6 +262,171 @@ checkpoint and at completion.
 A different recording selection retains a separate variant. It may require new
 execution to obtain missing observations. Metrics that need every action or reward
 reject sparse trajectories; the library does not infer omitted data.
+
+### GPU execution
+
+For a study whose components use CUDA, add this execution fragment:
+
+```yaml
+execution:
+  workers: 2
+  gpu_ids: [0, 1]
+```
+
+`gpu_ids` must be a nonempty list of distinct, nonnegative integers. Booleans,
+strings, `null`, negative IDs, and duplicates are rejected at configuration load.
+`workers` must equal the number of IDs, including after a CLI or Python API
+override. For one GPU, use `workers: 1` and `gpu_ids: [0]`; execution still takes
+place in a spawned process.
+
+IDs identify devices in the host or container runtime's GPU namespace, before
+CUDA masking. When `gpu_ids` is configured, EWS rejects an already-set
+`CUDA_VISIBLE_DEVICES`, including an empty value. Unset it before launch rather
+than passing indices relative to an existing mask. EWS validates configuration,
+but does not detect available hardware; the study's GPU framework reports an
+unavailable device. With `gpu_ids` omitted, EWS leaves the environment unchanged.
+
+Each configured GPU belongs to one worker for that worker's entire lifetime.
+EWS establishes its single-device `CUDA_VISIBLE_DEVICES` before the spawned
+interpreter imports the main script or study components. Planning, component
+validation, and source inspection needed by execution also run in a GPU worker.
+Runs assigned later to that worker use the same GPU. The algorithm selects its
+worker-local CUDA device, normally `cuda:0`; it needs neither the physical GPU
+ID nor scheduling code. The coordinator's environment is restored after launch.
+This boundary covers EWS execution imports; caller code imported before
+`run_experiment` and a custom planner imported by `ews count-runs` remain
+outside it. Embedded applications should avoid concurrent environment changes,
+GPU initialization, and unrelated subprocess launches while workers start; see
+[the launch boundary](ARCHITECTURE.md#source-organization).
+
+GPU assignment is operational configuration. The resolved configuration retains
+`gpu_ids`; request `provenance.execution` records worker PIDs and assignments,
+and run logs report the worker's PID and CUDA mask at INFO level. GPU IDs do not
+change scientific run IDs, injected RNG streams, or stored variant selection. This
+does not promise bitwise equality across hardware or GPU frameworks; study code
+must seed and checkpoint its own framework RNGs. Use supported numerical values
+with the default backend or supply a backend for native framework state.
+
+EWS imports no GPU framework and installs none. Assignments prevent concurrent
+workers in the same invocation from sharing a configured GPU; they do not
+reserve GPUs against other processes or experiments. GPU memory packing,
+fractional GPUs, multiple workers per GPU, multi-GPU training, and distributed
+scheduling are outside this execution mode.
+
+### Checkpoint backends
+
+Ordinary NumPy studies need no checkpoint backend configuration. The built-in
+`numpy` backend uses explicit JSON state descriptions and NPZ numerical arrays,
+without pickle. It accepts numerical NumPy arrays and scalars, ordinary scalars,
+lists, tuples, and string-keyed mappings. Configure it explicitly only when
+needed, for example to compress checkpoints independently of recorded results:
+
+```yaml
+execution:
+  compression: false
+  checkpoint_backend:
+    type: numpy
+    params: {compression: true}
+```
+
+For native framework state or a different file layout, select a paper-owned
+class with the same `type`/`params` form:
+
+```yaml
+execution:
+  checkpoint_backend:
+    type: experiment_code.checkpointing:NestedNumpyBackend
+    params: {compression: true}
+```
+
+The backend description accepts only `type` and `params`. `type` must be `numpy`
+or a `module:Class` import path; `params` is a mapping of finite YAML values and
+defaults to `{}`. The built-in backend accepts only a boolean `compression`
+parameter. Custom constructor parameters are validated when execution prepares
+the backend.
+
+`CheckpointBackend` and `NumPyCheckpointBackend` are public imports from
+`experiments_wo_stress.storage`. The interface is structural: inheritance is
+optional. Constructors receive only configured keyword parameters, with no
+injected scientific RNG. Implement both methods:
+
+| Method | Responsibility |
+| --- | --- |
+| `save(state, directory)` | Synchronously write one generation's payload and return a finite JSON-compatible metadata mapping. |
+| `load(directory, metadata)` | Read that payload using the saved metadata and return the complete logical state mapping. |
+
+The state mapping contains `algorithm`, `data`, `protocol`, and `rngs`. Component
+values come directly from `state_dict()`; EWS does not pack or convert them before
+calling a custom backend. The backend must preserve all four parts, including
+every injected RNG stream, without mutating live state. A native backend can
+handle opaque framework values or shard a large network across files; it owns
+the representation, not the scientific meaning of those values. Recorded
+observations and saved instances remain numerical and are independent of this
+extension.
+
+EWS supplies a new generation directory. Write all payload files beneath it,
+using subdirectories when useful. Do not write outside it, create symbolic links,
+or use the reserved root filename `checkpoint.json`. Finish asynchronous work
+and flush and close every file handle before `save` returns. Files are immutable
+after return, and `load` must not change the generation. EWS then enumerates,
+checksums, and synchronizes every payload file, writes its envelope, and commits
+the matching state, step, and result boundary atomically. The backend never
+publishes progress, chooses checkpoint timing, prunes generations, or changes
+result records.
+
+For example, put this dependency-free wrapper in `experiment_code/checkpointing.py`:
+
+```python
+from experiments_wo_stress.storage import NumPyCheckpointBackend
+
+
+class NestedNumpyBackend:
+    """Store the default representation under a private payload directory."""
+
+    def __init__(self, *, compression=False):
+        self.codec = NumPyCheckpointBackend(compression=compression)
+
+    def save(self, state, directory):
+        """Finish all payload writes and return versioned representation metadata."""
+        payload = directory / "payload"
+        payload.mkdir()
+        return {"version": 1, "payload": self.codec.save(state, payload)}
+
+    def load(self, directory, metadata):
+        """Recover the complete logical state without modifying saved files."""
+        if metadata["version"] != 1:
+            raise ValueError("Unsupported nested checkpoint version")
+        return self.codec.load(directory / "payload", metadata["payload"])
+```
+
+This example demonstrates nested files while retaining NumPy's supported values.
+A framework-native implementation can use its own serializer in the same
+boundary; EWS adds no framework dependency. Validate direct execution against
+pause/resume with the actual backend, including framework RNGs and device
+mapping. A GPU loader should restore onto the worker-local device, normally
+`cuda:0`, without assuming the original physical GPU.
+
+Each generation records its backend type, parameters, source fingerprints, and
+representation metadata. Restore uses that saved backend, even after the current
+configuration selects a different backend for new checkpoints. Keep saved
+backend modules and dependencies available, and make loaders understand their
+older representation versions. If no retained generation can be decoded, missing
+or incompatible loaders cause a continuation error while preserving artifacts.
+
+Backend classes may declare `dependency_files` relative to their module for
+source diagnostics. These fingerprints identify the implementation used to write
+a generation; a changed fingerprint alone does not reject it. Representation
+version compatibility remains the loader's job.
+
+Backend choice is operational: its parameters and separately tracked source do
+not change scientific run IDs, injected RNG streams, or stored variant selection.
+Resolved configuration and `provenance.checkpoint_backend` retain the selected
+backend for diagnosis.
+Keep backend code separate from scientific component modules, because changing
+a shared file still changes the tracked scientific source. Library implementation
+fingerprints remain conservative; upgrading EWS can select new variants. Reading
+legacy JSON/NPZ checkpoints remains supported, without automatically bypassing
+provenance or migrating old experiments.
 
 ## Budget continuation and retained artifacts
 
@@ -344,7 +517,7 @@ misaligned coordinates are rejected.
 work. Only completed, validated runs contribute; summaries report their actual
 count. Input, code, parameter, or declared dependency changes invalidate affected
 analysis. See [analysis and cache invalidation](ARCHITECTURE.md#analysis-and-cache-invalidation)
-for cache identities and [cleanup](#build-inspect-and-clean) for removing derived
+for cache identities and [cleanup](#run-inspect-and-clean) for removing derived
 artifacts.
 
 ## Figures
@@ -364,17 +537,49 @@ and receive configured `params`. A `Summary` contains the metric, group labels,
 coordinates, mean, uncertainty, repetition count, and uncertainty convention.
 Custom figure options belong in `params`.
 
-## Build, inspect, and clean
+## Run, inspect, and clean
 
 ```bash
-ews build examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
-ews inspect outputs/bandits
-ews clean outputs/bandits --scope inactive
+ews run examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
 ```
 
-`build` executes work then produces requested analysis. Individual `run`, `analyze`,
-and `plot` commands remain useful when working on one stage. Cleanup previews its
-selection and requires `--yes` to delete files.
+`run` executes or resumes the study, reuses compatible completed work, and then
+produces configured analysis and figures. This final stage runs only when there
+are no failed, paused, or pending runs. An interrupted or deliberately paused
+invocation can resume with the same command.
+
+CPU or GPU studies without analysis configuration perform execution only. A
+metrics-only configuration computes summaries; configured figures trigger the
+analysis they need and are then exported.
+
+An optional count helps estimate the work before an expensive study:
+
+```bash
+ews count-runs examples/sequential_study/experiment.yml
+```
+
+The command validates configuration and returns only `name` and `runs`, for example
+`{"name": "gaussian_bandit_comparison", "runs": 120}`. For a grid group, the
+count is grid combinations × algorithm count × repetitions; counts add across
+groups. Custom planners determine their own set of concrete runs. A count is useful with
+a representative run's time and memory measurements, but is never a prerequisite
+for `run`.
+
+`analyze` and `plot` work independently from saved numerical results, so changes
+to metrics or figure presentation do not require repeating expensive simulations.
+`analyze` computes or reuses metrics and summary tables; `plot` computes or reuses
+the analysis required for configured figures. `inspect` reports stored status.
+The public commands are `count-runs`, `run`, `analyze`, `plot`, `inspect`, and
+`clean`. Choose saved-data operations independently as needed:
+
+| Command | Use |
+| --- | --- |
+| `ews analyze examples/sequential_study/experiment.yml --output outputs/bandits` | Update metrics and summary tables. |
+| `ews plot examples/sequential_study/experiment.yml --output outputs/bandits` | Update figures using saved results. |
+| `ews inspect outputs/bandits` | Read stored status and validate completed artifacts. |
+| `ews clean outputs/bandits --scope inactive` | Preview removal of inactive retained artifacts. |
+
+Cleanup requires `--yes` to delete the previewed selection.
 
 | Cleanup scope | Removes |
 | --- | --- |
@@ -395,8 +600,8 @@ for recovery and artifact boundaries.
 
 ## Discord notifications
 
-Add an enabled Discord block to receive progress summaries during `run` and the
-execution stage of `build`:
+Add an enabled Discord block to receive progress summaries during the execution
+stage of `run`:
 
 ```yaml
 notifications:

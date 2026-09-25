@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import os
 import signal
 import time
 import traceback
@@ -161,6 +162,8 @@ class RunSession:
         self.recorder.flush()
         state = {name: component.state_dict() for name, component in self.components.items()}
         state["rngs"] = {name: rng.bit_generator.state for name, rng in self.rngs.items()}
+        # Pass logical values through untouched. The store's backend determines
+        # their representation, including any native tensors owned by study code.
         self.store.checkpoint(state, self.recorder.manifest, self.protocol.step, status=status)
         self.checkpoint_time, self.checkpoint_step = time.monotonic(), self.protocol.step
         self.logger.debug("Checkpoint committed at step %s", self.protocol.step)
@@ -199,10 +202,17 @@ def execute_run(
     session = None
     with run_logging(directory, spec.run_id, execution) as logger:
         try:
+            if "gpu_ids" in execution:
+                logger.info(
+                    "GPU worker pid=%s CUDA_VISIBLE_DEVICES=%s local_device=cuda:0",
+                    os.getpid(),
+                    os.environ["CUDA_VISIBLE_DEVICES"],
+                )
             store = RunStore(
                 directory,
                 compression=execution.get("compression", False),
                 keep_checkpoints=execution.get("keep_checkpoints", 2),
+                checkpoint_backend=execution.get("checkpoint_backend"),
             )
             session = RunSession(
                 spec,

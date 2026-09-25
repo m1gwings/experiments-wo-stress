@@ -15,8 +15,10 @@ import yaml
 
 from ..builtins.protocols import OfflineProtocol, OnlineProtocol
 from ..components.loading import resolve_type
+from ..storage.checkpoints import describe_checkpoint_backend
 from ..storage.files import EXPERIMENT_SCHEMA_VERSION, SCHEMA_VERSION, digest_file, fingerprint
 from ..study.config import ExperimentConfig
+from ..study.planning import plan_runs
 from ..study.specs import ComponentSpec, RunSpec
 
 
@@ -99,6 +101,7 @@ def collect_provenance(config: ExperimentConfig, sources: dict[str, str]) -> dic
         "execution/coordinator.py",
         "execution/worker.py",
         "execution/provenance.py",
+        "execution/resources.py",
         "storage/models.py",
         "storage/files.py",
         "storage/run.py",
@@ -144,6 +147,12 @@ def collect_provenance(config: ExperimentConfig, sources: dict[str, str]) -> dic
         "revision": revision,
         "dirty": dirty,
         "host": socket.gethostname(),
+        # Representation is operational. Its sources are diagnostic metadata,
+        # excluded from prepare_request's simulation compatibility signature.
+        "checkpoint_backend": describe_checkpoint_backend(
+            config.execution.get("checkpoint_backend"),
+            compression=config.execution.get("compression", False),
+        ),
     }
 
 
@@ -277,3 +286,17 @@ def prepare_request(
     }
     request_id = fingerprint({"requests": requests, "recording": recording})
     return PreparedRequest(locations, variants, request_id, request)
+
+
+def prepare_gpu_request(
+    config: ExperimentConfig,
+) -> tuple[list[RunSpec], dict[str, Any], PreparedRequest]:
+    """Inspect study code within an assigned GPU worker and return plain metadata.
+
+    Planners, contract inspection, and source fingerprints can import scientific
+    modules. Keeping all three here prevents GPU-enabled execution from loading
+    those modules in the coordinator, which does not own a device.
+    """
+    specs = plan_runs(config)
+    provenance = collect_provenance(config, preflight(specs))
+    return specs, provenance, prepare_request(config, specs, provenance)

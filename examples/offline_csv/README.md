@@ -15,16 +15,23 @@ From the repository root, after `python -m pip install -e .`:
 
 ```bash
 ews run examples/offline_csv/experiment.yml --output output/offline
-ews analyze examples/offline_csv/experiment.yml --output output/offline
 ews inspect output/offline
 ```
 
 The protocol loads the data and calls `fit(dataset)` once. That fit returns
-named numerical outputs, which the configured metrics read after execution. The
-CSV generator also saves the input matrix as the run's instance, so later
-analysis can inspect it without loading the estimator. There is one repetition:
+named numerical outputs. After successful execution, `run` applies the configured
+metrics to those saved outputs. The CSV generator also saves the input matrix
+as the run's instance, so analysis can inspect it later without loading the
+estimator. There is one repetition:
 repeating the same deterministic fit on the same data would not add independent
 evidence.
+
+After changing metrics or aggregation settings, update summaries from saved
+results without fitting the estimator again:
+
+```bash
+ews analyze examples/offline_csv/experiment.yml --output output/offline
+```
 
 A later run validates and reuses the completed result. If execution stops inside
 `fit`, the entire fit starts again because this protocol has one step. For a

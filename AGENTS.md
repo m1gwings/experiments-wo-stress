@@ -16,8 +16,8 @@ contract, with real-paper validation still needed before declaring it stable.
   - `study/`: configuration, run descriptions, planning, and stable random streams.
   - `components/`: extension contracts and component loading.
   - `builtins/`: supplied protocols, data generators, bandits, bandit metrics, and Gymnasium adapter.
-  - `execution/`: coordination, run sessions, provenance, logs, and notifications.
-  - `storage/`: artifact models, experiment ownership, checkpoints, and cleanup.
+  - `execution/`: coordination, GPU resources, run sessions, provenance, logs, and notifications.
+  - `storage/`: artifact models, experiment ownership, checkpoint backends, and cleanup.
   - `analysis/`: metrics, aggregation, caches, and figures.
   - Legacy top-level modules re-export public names; internal imports use their owners.
 - `examples/sequential_study/`: repeated Gaussian bandit study with custom components.
@@ -43,8 +43,18 @@ contract, with real-paper validation still needed before declaring it stable.
   instance. Do not hide metric accumulators in the data generator.
 - Inject separate RNGs; do not use global randomness. Seeds and run identities
   must remain independent of worker count, scheduling, and grid traversal order.
+- Keep GPU allocation in execution infrastructure and out of scientific identities
+  and RNG streams. A GPU worker owns one device for its lifetime; establish CUDA
+  visibility before the spawned interpreter imports study code. Scientific
+  algorithms use the local device, never schedule physical GPUs. CPU studies
+  require no GPU configuration; test allocation without a GPU framework.
 - Checkpoint only at complete protocol steps. Preserve RNG state and result
   boundaries together; never accept a partial artifact as a completed run.
+- Checkpoint backends own state representation only. Pass complete component and
+  RNG state without mandatory conversion; keep generation integrity, commit
+  publication, fallback, and retention in storage infrastructure. Default NumPy
+  studies need no backend configuration. Restore with the saved backend and keep
+  backend selection operational rather than part of scientific identity.
 - Never silently mix incompatible scientific settings, code, or tracked inputs.
   Select matching retained variants and report damaged artifacts. Preserve recovery
   from a preceding valid checkpoint and avoid duplicate records.
@@ -53,6 +63,10 @@ contract, with real-paper validation still needed before declaring it stable.
   distinct recording variants and identify the selected variant in metadata.
 - Keep stored numerical results separate from figures. Analysis must work without
   importing simulation components; custom metrics/plotters may import their own code.
+- Keep the public CLI to `count-runs`, `run`, `analyze`, `plot`, `inspect`, and
+  `clean`. `run` executes or resumes the study, then produces configured analysis
+  and figures only after all requested runs succeed. Counting runs is optional;
+  `analyze` and `plot` operate on saved results without scheduling simulations.
 - Keep memory and dependencies proportionate. Buffering is per active run, and
   analysis retains one run plus grouped summaries. Distributed execution is outside scope.
 - Deliver professional-quality code for every implementation task: clear names,

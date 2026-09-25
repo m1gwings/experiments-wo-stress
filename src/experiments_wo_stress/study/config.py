@@ -289,12 +289,66 @@ def _group(value: Any, index: int, source_dir: Path) -> dict[str, Any]:
     return value
 
 
+def validate_gpu_workers(execution: Mapping[str, Any], workers: int) -> tuple[int, ...] | None:
+    """Validate an optional GPU allocation against the effective worker count.
+
+    Return configured device IDs in their original order, or ``None`` for CPU
+    execution. Configuration loading and runtime worker overrides share this
+    check so an override cannot oversubscribe a configured device. This validates
+    the request only; device visibility and process ownership belong to execution.
+    """
+    if "gpu_ids" not in execution:
+        return None
+    gpu_ids = execution["gpu_ids"]
+    if not isinstance(gpu_ids, list) or not gpu_ids:
+        raise ValueError("execution.gpu_ids must be a nonempty list of nonnegative integers")
+    for index, gpu_id in enumerate(gpu_ids):
+        _integer(gpu_id, f"execution.gpu_ids[{index}]")
+    if len(set(gpu_ids)) != len(gpu_ids):
+        raise ValueError("execution.gpu_ids must not contain duplicate GPU IDs")
+    _integer(workers, "execution.workers", 1)
+    if workers != len(gpu_ids):
+        raise ValueError(
+            "execution.workers must equal the number of execution.gpu_ids "
+            f"(one worker per GPU; got {workers} workers and {len(gpu_ids)} GPU IDs)"
+        )
+    return tuple(gpu_ids)
+
+
+def validate_checkpoint_backend(value: Any) -> dict[str, Any]:
+    """Normalize a checkpoint serializer description without importing its code.
+
+    Backend selection is operational configuration. Custom backends receive
+    their plain configured parameters; the built-in NumPy backend accepts only
+    an optional compression flag. When omitted, that flag inherits execution's
+    compression setting when the backend is constructed.
+    """
+    path = "execution.checkpoint_backend"
+    backend = _mapping(value, path)
+    _keys(backend, {"type", "params"}, path)
+    backend_type = _text(backend.get("type"), f"{path}.type")
+    parts = backend_type.split(":")
+    if backend_type != "numpy" and (
+        len(parts) != 2
+        or any(not name.isidentifier() for part in parts for name in part.split("."))
+    ):
+        raise ValueError(f"{path}.type must be 'numpy' or a module:Class import path")
+    params = _mapping(backend.get("params", {}), f"{path}.params")
+    _json_value(params, f"{path}.params")
+    if backend_type == "numpy":
+        _keys(params, {"compression"}, f"{path}.params")
+        if "compression" in params and not isinstance(params["compression"], bool):
+            raise ValueError(f"{path}.params.compression must be a boolean")
+    return {"type": backend_type, "params": copy.deepcopy(params)}
+
+
 def _execution_settings(value: Any) -> dict[str, Any]:
     execution = _mapping(value, "execution")
-    _keys(execution, set(_EXECUTION), "execution")
+    _keys(execution, set(_EXECUTION) | {"gpu_ids", "checkpoint_backend"}, "execution")
     execution = {**_EXECUTION, **execution}
     for key in ("workers", "keep_checkpoints"):
         _integer(execution[key], f"execution.{key}", 1)
+    validate_gpu_workers(execution, execution["workers"])
     _integer(execution["log_max_bytes"], "execution.log_max_bytes", 1)
     _integer(execution["log_backups"], "execution.log_backups", 1)
     level = execution["logging_level"]
@@ -316,6 +370,10 @@ def _execution_settings(value: Any) -> dict[str, Any]:
         raise ValueError("execution.checkpoint_seconds must be positive or null")
     if not isinstance(execution["compression"], bool):
         raise ValueError("execution.compression must be a boolean")
+    if "checkpoint_backend" in execution:
+        execution["checkpoint_backend"] = validate_checkpoint_backend(
+            execution["checkpoint_backend"]
+        )
     return execution
 
 

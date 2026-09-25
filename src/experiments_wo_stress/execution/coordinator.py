@@ -16,11 +16,12 @@ from typing import Any
 import yaml
 
 from ..storage.experiment import ExperimentStore
-from ..study.config import ExperimentConfig, load_config
+from ..study.config import ExperimentConfig, load_config, validate_gpu_workers
 from ..study.planning import plan_runs
 from ..study.specs import RunSpec
 from .notifications import ExperimentNotifier
-from .provenance import collect_provenance, preflight, prepare_request
+from .provenance import PreparedRequest, collect_provenance, preflight, prepare_request
+from .resources import GPUWorker, gpu_workers, validate_gpu_environment, wait_gpu_workers
 from .worker import execute_run, initialize_worker
 
 
@@ -83,10 +84,15 @@ class ExecutionCoordinator:
         self.workers = workers
         self.max_steps = max_steps
         self.execution = dict(config.execution)
+        self.gpu_ids = validate_gpu_workers(self.execution, workers)
+        if self.gpu_ids is not None:
+            validate_gpu_environment()
         self.store = ExperimentStore(Path(output_dir).resolve())
         self.report = RunReport()
         self.context = multiprocessing.get_context("spawn")
-        self.stop_event = self.context.Event() if workers > 1 else threading.Event()
+        self.stop_event = (
+            self.context.Event() if workers > 1 or self.gpu_ids is not None else threading.Event()
+        )
         self.plan: list[RunSpec] = []
         self.locations: dict[str, str] = {}
         self.notifier: ExperimentNotifier | None = None
@@ -96,6 +102,8 @@ class ExecutionCoordinator:
         source_dir = str(self.config.source_dir)
         if source_dir not in sys.path:
             sys.path.insert(0, source_dir)
+        if self.gpu_ids is not None:
+            return self._run_with_gpus()
         self.plan = plan_runs(self.config)
         self.notifier = ExperimentNotifier(
             self.config.notifications, self.config.name, len(self.plan)
@@ -120,6 +128,10 @@ class ExecutionCoordinator:
     def _publish_request(self, provenance: dict[str, Any]) -> None:
         self.store.validate_execution_root()
         prepared = prepare_request(self.config, self.plan, provenance)
+        self._publish_prepared_request(prepared)
+
+    def _publish_prepared_request(self, prepared: PreparedRequest) -> None:
+        """Publish worker-prepared metadata without importing scientific components."""
         for storage_id, metadata in prepared.variants.items():
             self.store.publish_variant(storage_id, metadata)
         self.store.publish_request(
@@ -128,6 +140,74 @@ class ExecutionCoordinator:
             yaml.safe_dump(self.config.to_dict(), sort_keys=False),
         )
         self.locations = prepared.locations
+
+    def _run_with_gpus(self) -> RunReport:
+        """Prepare and run science only in processes with lifetime GPU assignments."""
+        with (
+            self._signal_handlers(),
+            gpu_workers(self.gpu_ids, self.context, self.stop_event) as workers,
+        ):
+            # Planning, preflight, and variant selection can all import study code.
+            # Do them in an assigned worker before constructing any run components.
+            self.plan, provenance, prepared = workers[0].prepare(self.config)
+            provenance["execution"] = {
+                "workers": self.workers,
+                "gpu_ids": list(self.gpu_ids),
+                "worker_assignments": [
+                    {"pid": worker.pid, "gpu_id": worker.gpu_id} for worker in workers
+                ],
+            }
+            # This operational record is excluded from prepared scientific identities.
+            prepared.metadata["provenance"] = provenance
+            self.notifier = ExperimentNotifier(
+                self.config.notifications, self.config.name, len(self.plan)
+            )
+            self.store.root.mkdir(parents=True, exist_ok=True)
+            with self.store.lock():
+                self.store.validate_execution_root()
+                self._publish_prepared_request(prepared)
+                self.notifier.start()
+                aborted = True
+                try:
+                    self._schedule_gpu_runs(workers)
+                    aborted = False
+                finally:
+                    self.notifier.finish(self.report.to_dict(), aborted=aborted)
+        return self.report
+
+    def _schedule_gpu_runs(self, workers: list[GPUWorker]) -> None:
+        """Keep at most one run in flight on each exclusively assigned GPU worker."""
+        remaining = iter(self.plan)
+        active: dict[GPUWorker, str] = {}
+
+        def submit_next(worker: GPUWorker) -> None:
+            if self.stop_event.is_set():
+                return
+            spec = next(remaining, None)
+            if spec is None:
+                return
+            self._run_started(spec)
+            try:
+                worker.submit(self._arguments(spec))
+            except Exception as exc:
+                self._run_finished((spec.run_id, "failed", f"Worker failure: {exc}"))
+                self.stop_event.set()
+            else:
+                active[worker] = spec.run_id
+
+        for worker in workers:
+            submit_next(worker)
+        while active:
+            for worker in wait_gpu_workers(list(active)):
+                run_id = active.pop(worker)
+                try:
+                    result = worker.result()
+                except Exception as exc:
+                    result = (run_id, "failed", f"Worker failure: {exc}")
+                    self.stop_event.set()
+                self._run_finished(result)
+                submit_next(worker)
+        self.report.pending = sum(1 for _ in remaining)
 
     @contextmanager
     def _signal_handlers(self) -> Iterator[None]:

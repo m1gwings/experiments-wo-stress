@@ -82,6 +82,55 @@ class _StudyConfigurationCase(unittest.TestCase):
 class ConfigurationLoadingTests(_StudyConfigurationCase):
     """Validate and normalize YAML without constructing scientific components."""
 
+    def test_cpu_execution_defaults_do_not_include_gpu_configuration(self):
+        """Ordinary CPU studies retain their existing resolved execution settings."""
+        config = self.load_configuration()
+        self.assertEqual(
+            config.execution,
+            {
+                "workers": 1,
+                "checkpoint_seconds": 120.0,
+                "checkpoint_steps": None,
+                "keep_checkpoints": 2,
+                "compression": False,
+                "logging_level": "INFO",
+                "log_max_bytes": 2 * 1024 * 1024,
+                "log_backups": 2,
+            },
+        )
+        self.assertNotIn("gpu_ids", config.to_dict()["execution"])
+
+    def test_gpu_ids_preserve_explicit_assignments_in_resolved_configuration(self):
+        """A GPU list uses one worker per device and retains the configured order."""
+        for execution in ({"gpu_ids": [3]}, {"workers": 2, "gpu_ids": [7, 3]}):
+            with self.subTest(execution=execution):
+                self.document["execution"] = execution
+                config = self.load_configuration()
+                self.assertEqual(config.execution["gpu_ids"], execution["gpu_ids"])
+                self.assertEqual(config.execution["workers"], len(execution["gpu_ids"]))
+                self.assertEqual(config.to_dict()["execution"]["gpu_ids"], execution["gpu_ids"])
+
+    def test_malformed_gpu_ids_fail_during_configuration_loading(self):
+        """Only a nonempty list of distinct, nonnegative integer GPU IDs is accepted."""
+        invalid_ids = (None, [], 0, "0", {}, [True], [False], [0.0], ["0"], [-1], [0, 0])
+        for gpu_ids in invalid_ids:
+            with self.subTest(gpu_ids=gpu_ids):
+                self.document["execution"] = {"gpu_ids": gpu_ids}
+                with self.assertRaisesRegex(ValueError, r"execution\.gpu_ids"):
+                    self.load_configuration()
+
+    def test_worker_count_must_match_the_number_of_gpu_ids(self):
+        """Neither extra workers nor unused configured GPUs are accepted implicitly."""
+        for execution in (
+            {"gpu_ids": [0, 1]},
+            {"workers": 1, "gpu_ids": [0, 1]},
+            {"workers": 3, "gpu_ids": [0, 1]},
+        ):
+            with self.subTest(execution=execution):
+                self.document["execution"] = execution
+                with self.assertRaisesRegex(ValueError, "one worker per GPU"):
+                    self.load_configuration()
+
     def test_loading_custom_planner_does_not_import_it(self):
         """Configuration parsing can describe a planner whose Python module is unavailable."""
         self.document["runs"][0]["planner"] = "unavailable_components.planners:SubsetPlanner"
@@ -174,6 +223,93 @@ class ConfigurationLoadingTests(_StudyConfigurationCase):
             load_config(self.path)
 
 
+class CheckpointBackendConfigurationTests(_StudyConfigurationCase):
+    """Describe optional checkpoint serialization without importing backend code."""
+
+    def test_default_checkpoint_backend_requires_no_configuration(self):
+        """Existing studies keep the same resolved execution settings when omitted."""
+        config = self.load_configuration()
+        self.assertNotIn("checkpoint_backend", config.execution)
+        self.assertNotIn("checkpoint_backend", config.to_dict()["execution"])
+
+    def test_checkpoint_backend_normalizes_parameters_and_preserves_compression_choice(self):
+        """Built-in and custom descriptions retain parameters without eager construction."""
+        backends = (
+            {"type": "numpy"},
+            {"type": "numpy", "params": {"compression": False}},
+            {"type": "numpy", "params": {"compression": True}},
+            {"type": "paper.checkpoints:Backend"},
+            {
+                "type": "paper.checkpoints:Backends.Custom",
+                "params": {"device": "cpu", "options": {"levels": [1, None, True, 0.5]}},
+            },
+        )
+        for backend in backends:
+            with self.subTest(backend=backend):
+                self.document["execution"] = {"checkpoint_backend": backend, "compression": True}
+                config = self.load_configuration()
+                expected = {"type": backend["type"], "params": backend.get("params", {})}
+                self.assertEqual(config.execution["checkpoint_backend"], expected)
+                self.assertEqual(config.to_dict()["execution"]["checkpoint_backend"], expected)
+                self.assertTrue(config.execution["compression"])
+
+    def test_loading_checkpoint_backend_does_not_import_it(self):
+        """A selected backend may be unavailable or unsafe to import in the coordinator."""
+        module = self.path.parent / "configuration_only_backend.py"
+        module.write_text("raise RuntimeError('backend was imported')\n", encoding="utf-8")
+        for backend_type in (
+            "unavailable_checkpoints:Backend",
+            "configuration_only_backend:Backend",
+        ):
+            with self.subTest(backend_type=backend_type):
+                self.document["execution"] = {"checkpoint_backend": {"type": backend_type}}
+                config = self.load_configuration()
+                self.assertEqual(config.execution["checkpoint_backend"]["type"], backend_type)
+
+    def test_malformed_checkpoint_backend_descriptions_are_rejected(self):
+        """Invalid shapes, import paths, and built-in parameters fail during YAML loading."""
+        invalid_backends = (
+            None,
+            [],
+            "numpy",
+            {},
+            {"type": None},
+            {"type": True},
+            {"type": ""},
+            {"type": " "},
+            {"type": "custom"},
+            {"type": "paper:"},
+            {"type": ":Backend"},
+            {"type": "paper:Backend:Other"},
+            {"type": "paper..checkpoints:Backend"},
+            {"type": "paper:Backend Name"},
+            {"type": "numpy", "unknown": True},
+            {"type": "numpy", "params": None},
+            {"type": "numpy", "params": []},
+            {"type": "numpy", "params": {"unknown": True}},
+            {"type": "numpy", "params": {"compression": None}},
+            {"type": "numpy", "params": {"compression": 1}},
+            {"type": "numpy", "params": {"compression": "true"}},
+            {"type": "paper:Backend", "params": {"scale": float("inf")}},
+            {"type": "paper:Backend", "params": {"scale": float("nan")}},
+        )
+        for backend in invalid_backends:
+            with self.subTest(backend=backend):
+                self.document["execution"] = {"checkpoint_backend": backend}
+                with self.assertRaisesRegex(ValueError, r"execution\.checkpoint_backend"):
+                    self.load_configuration()
+
+    def test_backend_parameters_require_string_keys_and_plain_yaml_values(self):
+        """Custom backend parameters cannot hide unsupported YAML objects or mapping keys."""
+        for params in ({1: "value"}, {"nested": {2: "value"}}, {"values": {1, 2}}):
+            with self.subTest(params=params):
+                self.document["execution"] = {
+                    "checkpoint_backend": {"type": "paper:Backend", "params": params}
+                }
+                with self.assertRaises(ValueError):
+                    self.load_configuration()
+
+
 class RunPlanningTests(_StudyConfigurationCase):
     """Expand or customize the run grid while retaining valid run descriptions."""
 
@@ -239,6 +375,50 @@ class RunPlanningTests(_StudyConfigurationCase):
 
 class ScientificIdentityTests(_StudyConfigurationCase):
     """Keep scientific identities and random streams independent of execution choices."""
+
+    def test_checkpoint_backend_does_not_change_scientific_identity_or_rng_streams(self):
+        """Serialization choices preserve the run plan and all four injected RNG streams."""
+        original = self.load_configuration()
+        original_runs = plan_runs(original)
+        for backend in (
+            {"type": "numpy"},
+            {"type": "numpy", "params": {"compression": True}},
+            {"type": "paper.checkpoints:Backend", "params": {"device": "cpu"}},
+        ):
+            with self.subTest(backend=backend):
+                self.document["execution"] = {"checkpoint_backend": backend}
+                changed = self.load_configuration()
+                changed_runs = plan_runs(changed)
+                self.assertEqual(original.simulation_dict(), changed.simulation_dict())
+                self.assertEqual(original_runs, changed_runs)
+                for original_run, changed_run in zip(original_runs, changed_runs, strict=True):
+                    for stream in ("algorithm", "data", "protocol", "instance"):
+                        np.testing.assert_array_equal(
+                            make_rngs(original_run)[stream].normal(size=20),
+                            make_rngs(changed_run)[stream].normal(size=20),
+                        )
+
+    def test_gpu_allocation_does_not_change_scientific_identity_or_rng_streams(self):
+        """CPU and GPU allocations describe the same science and all four RNG streams."""
+        original = self.load_configuration()
+        original_runs = plan_runs(original)
+        for execution in (
+            {"gpu_ids": [3]},
+            {"workers": 2, "gpu_ids": [2, 9]},
+            {"workers": 2, "gpu_ids": [5, 1]},
+        ):
+            with self.subTest(execution=execution):
+                self.document["execution"] = execution
+                changed = self.load_configuration()
+                changed_runs = plan_runs(changed)
+                self.assertEqual(original.simulation_dict(), changed.simulation_dict())
+                self.assertEqual(original_runs, changed_runs)
+                for original_run, changed_run in zip(original_runs, changed_runs, strict=True):
+                    for stream in ("algorithm", "data", "protocol", "instance"):
+                        np.testing.assert_array_equal(
+                            make_rngs(original_run)[stream].normal(size=20),
+                            make_rngs(changed_run)[stream].normal(size=20),
+                        )
 
     def test_grid_order_workers_and_analysis_do_not_change_identity(self):
         """Scheduling, display options, and grid order leave scientific identities unchanged."""

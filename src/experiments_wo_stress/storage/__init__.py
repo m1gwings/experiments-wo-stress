@@ -4,6 +4,7 @@ The exports retain the historical storage API. Implementation code imports the
 owning modules so that persistence dependencies remain visible.
 """
 
+from .checkpoints import CheckpointBackend, NumPyCheckpointBackend
 from .experiment import ExperimentStore, iter_completed_runs, load_instance, save_instance
 from .files import (
     EXPERIMENT_SCHEMA_VERSION,
@@ -21,7 +22,9 @@ from .run import Recorder, RunStore, validate_results
 __all__ = [
     "EXPERIMENT_SCHEMA_VERSION",
     "SCHEMA_VERSION",
+    "CheckpointBackend",
     "ExperimentStore",
+    "NumPyCheckpointBackend",
     "Recorder",
     "RunStore",
     "StorageError",

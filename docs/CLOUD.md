@@ -99,6 +99,12 @@ The bind mount keeps output outside the container; the host path must itself be
 on persistent storage. Only one executor should write a given output directory.
 Use separate directories for separate studies.
 
+After all requested runs complete successfully, `run` computes the configured
+analysis and exports any configured figures. A paused or failed execution keeps
+its artifacts for resumption and does not start analysis.
+`count-runs` is an optional preview of study size; you do not need to invoke it
+before `run`.
+
 To stop and resume with the same image and mount:
 
 ```bash
@@ -111,7 +117,8 @@ A long offline `fit()` or callable trial is one step and may restart from its
 previous checkpoint if stopped during that call. See the
 [checkpoint model](ARCHITECTURE.md#checkpoints-completion-and-interruption).
 
-Inspect results or generate figures using the same image and output mount:
+Inspect results or regenerate figures after changing plot settings, using the
+same image and output mount:
 
 ```bash
 docker run --rm \
@@ -125,6 +132,10 @@ docker run --rm \
   paper-study:locked plot /workspace/experiment.yml --output /output/study
 ```
 
+`plot` uses saved numerical results without scheduling simulations. Use `analyze`
+instead when only metrics or aggregation settings have changed and you want
+updated summaries from those results.
+
 Back up the complete output tree after stopping execution or at another
 consistent point. Object storage is suitable for backups, but the live output
 directory needs filesystem locking and atomic file replacement.
@@ -137,6 +148,40 @@ matrix operations may work better with fewer workers and more numerical threads.
 Allow room for each worker's result buffer (16 MiB by default), component state,
 checkpoints, retained run variants, and analysis artifacts.
 
+Ordinary NumPy studies need no checkpoint backend configuration. If a large
+model needs native framework serialization or multiple checkpoint files, use a
+paper-owned `execution.checkpoint_backend` as described in
+[checkpoint backends](CONFIGURATION.md#checkpoint-backends). Include its module
+and serializer dependencies in the pinned image. EWS passes logical state to the
+backend and retains responsibility for checksums, complete-step publication,
+fallback, and retention. Native serialization can avoid a compulsory NumPy copy,
+but its actual memory and I/O costs depend on the backend; measure them with a
+representative model.
+
+Ordinary CPU experiments require no GPU configuration. On a GPU VM, arrange GPU
+access and install the study's compatible framework in the container, then use
+one worker per GPU:
+
+```yaml
+execution:
+  workers: 2
+  gpu_ids: [0, 1]
+```
+
+GPU IDs use the container runtime's unmasked GPU namespace; they are not indices
+into a preexisting CUDA mask. `CUDA_VISIBLE_DEVICES` must be unset when EWS starts
+GPU execution, even if the container image sets it to an empty value. Each
+spawned worker inherits a single-device mask before study imports and keeps it
+for its lifetime; the algorithm uses its local device, normally `cuda:0`. This
+also applies with one GPU and one worker. Any `--workers` override must match the
+number of IDs.
+
+EWS manages visibility only: it does not install a framework, discover GPU
+availability, or reserve devices against another experiment. Allocate disjoint
+GPUs to concurrent invocations. Memory packing, multiple workers sharing a GPU,
+multi-GPU training, and distributed scheduling are outside this mode. See
+[GPU execution](CONFIGURATION.md#gpu-execution) for the full configuration rules.
+
 **Use the same VM and software environment when you need exact checkpoint
 continuation.** Compatibility checks include Python and numerical-library
 versions, platform identity, source code, and tracked input paths. Even the same
@@ -145,10 +190,24 @@ kernel or resolved paths differ. Keep `/workspace` and `/output` stable and
 validate any migration before relying on reuse. Saved results can still be
 copied for separate analysis.
 
+Changing the configured checkpoint backend affects new writes. Continuation
+loads each saved generation with its recorded backend type and parameters, so
+keep previous backend code and representation readers available in the image.
+Back up whole generations, including every nested payload file and their envelope.
+If no retained generation can be decoded, missing serializer dependencies cause
+a continuation error while saved artifacts are preserved. Numerical analysis
+does not require loading native checkpoint payloads. Legacy NumPy checkpoints
+remain readable, subject to the same scientific and library compatibility checks.
+
+Changing GPU assignment alone does not select a new scientific run or stored
+variant. It remains visible in execution diagnostics, but does not guarantee
+bitwise reproducibility across GPU models or framework versions. Check framework
+state conversion and RNG restoration in the study's own continuation tests.
+
 ## Optional progress messages
 
-Discord summaries can report progress during `run` and the execution stage of
-`build`. Configure them as described in
+Discord summaries can report progress during the execution stage of `run`.
+Configure them as described in
 [Discord notifications](CONFIGURATION.md#discord-notifications), set
 `EWS_DISCORD_WEBHOOK_URL` in the VM environment, and add
 `--env EWS_DISCORD_WEBHOOK_URL` to `docker run`. Keep the webhook out of YAML,

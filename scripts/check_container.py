@@ -151,15 +151,17 @@ def main() -> int:
             ]
             paused = run([*container, "run", *invocation, "--max-steps", "5"], report=True)
             assert paused["paused"] == 2 and paused["failed"] == 0, paused
+            assert "figures" not in paused, paused
             resumed = run([*container, "run", *invocation], report=True)
             assert resumed["completed"] == 2 and resumed["failed"] == 0, resumed
+            assert resumed["figures"], resumed
             inspected = run([*container, "inspect", "/output/study"], report=True)
             assert inspected["counts"]["completed"] == 2, inspected
             assert all(item["step"] == 20 for item in inspected["runs"]), inspected
             for _ in range(2):
-                built = run([*container, "build", *invocation], report=True)
-                assert built["skipped"] == 2 and built["failed"] == 0, built
-                assert built["figures"], built
+                reused = run([*container, "run", *invocation], report=True)
+                assert reused["skipped"] == 2 and reused["failed"] == 0, reused
+                assert reused["figures"], reused
             figures = list((output / "study" / "analysis" / "figures").glob("*.tikz"))
             assert figures and all("\\begin{tikzpicture}" in path.read_text() for path in figures)
             print(

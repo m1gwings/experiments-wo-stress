@@ -26,8 +26,9 @@ class Checkpointable(Protocol):
     """Describe the mutable component state needed to continue an interrupted run.
 
     The executor snapshots every component at the same complete protocol step.
-    Implementations must include all evolving scientific state, using supported
-    plain values and numerical arrays. The executor saves injected RNGs separately.
+    Implementations must include all evolving scientific state. The selected
+    checkpoint backend determines which values it can encode; the default handles
+    plain values and numerical arrays. The executor gathers injected RNGs separately.
     """
 
     def state_dict(self) -> Mapping[str, Any]:

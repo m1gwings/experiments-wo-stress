@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import stat
 import uuid
 from collections.abc import Mapping
 from pathlib import Path
@@ -91,6 +92,60 @@ def write_arrays(path: Path, arrays: Mapping[str, np.ndarray], compression: bool
         sync_directory(path.parent)
     finally:
         temporary.unlink(missing_ok=True)
+
+
+def checkpoint_files(directory: Path) -> dict[str, Path]:
+    """Inventory a generation's regular payload files without following links.
+
+    The checkpoint manager, never the backend, builds this complete inventory.
+    ``checkpoint.json`` is its reserved envelope and is omitted from payloads.
+    Portable relative names and regular files keep validation within the generation.
+    """
+    files = {}
+
+    def visit(parent: Path) -> None:
+        if parent.is_symlink() or not parent.is_dir():
+            raise StorageError(f"Checkpoint directory must be a real directory: {parent}")
+        for path in sorted(parent.iterdir()):
+            relative = path.relative_to(directory).as_posix()
+            if "\\" in relative or ":" in relative:
+                raise StorageError(f"Nonportable checkpoint payload path: {relative!r}")
+            mode = path.lstat().st_mode
+            if stat.S_ISDIR(mode):
+                visit(path)
+            elif not stat.S_ISREG(mode):
+                raise StorageError(f"Checkpoint payload must be a regular file: {path}")
+            elif relative != "checkpoint.json":
+                files[relative] = path
+
+    visit(directory)
+    return files
+
+
+def seal_checkpoint_files(directory: Path) -> dict[str, str]:
+    """Synchronize every backend payload and directory before recording its checksum."""
+    files = checkpoint_files(directory)
+    checksums = {}
+    for name, path in files.items():
+        with path.open("rb") as stream:
+            os.fsync(stream.fileno())
+        checksums[name] = digest_file(path)
+    # Persist nested directory entries from leaves upward, including empty dirs.
+    directories = [path for path in directory.rglob("*") if path.is_dir()]
+    for path in sorted(directories, key=lambda item: len(item.parts), reverse=True):
+        sync_directory(path)
+    sync_directory(directory)
+    return checksums
+
+
+def validate_checkpoint_files(directory: Path, checksums: dict[str, str]) -> None:
+    """Require an exact payload inventory and verify all bytes before decoding state."""
+    files = checkpoint_files(directory)
+    if not isinstance(checksums, dict) or files.keys() != checksums.keys():
+        raise StorageError(f"Checkpoint payload inventory does not match: {directory}")
+    for name, path in files.items():
+        if digest_file(path) != checksums[name]:
+            raise StorageError(f"Missing or corrupt checkpoint payload: {path}")
 
 
 def pack_state(value: Any, arrays: dict[str, np.ndarray]) -> Any:

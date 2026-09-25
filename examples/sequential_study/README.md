@@ -30,27 +30,36 @@ From the repository root:
 
 ```bash
 python -m pip install -e '.[plot]'
-ews plan examples/sequential_study/experiment.yml
-ews build examples/sequential_study/experiment.yml --output outputs/bandits
+ews run examples/sequential_study/experiment.yml --output outputs/bandits
 ews inspect outputs/bandits
 ```
 
-`plan` shows the 120 runs before computation. `build` runs them and produces the
-configured analysis; figures appear under `outputs/bandits/analysis/figures/`.
-Running `build` again reuses compatible completed work.
+`run` executes the study and, after successful completion, produces the configured
+analysis; figures appear under `outputs/bandits/analysis/figures/`. Running it
+again reuses compatible completed work. To preview the size first, the optional
+`ews count-runs examples/sequential_study/experiment.yml` reports 120 runs.
+You do not need to invoke `count-runs` before `run`.
 
 To see interruption and resumption, use a separate output directory:
 
 ```bash
 ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --max-steps 300
 ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --workers 2
-ews plot examples/sequential_study/experiment.yml --output outputs/resume-demo
 ```
 
 The first command pauses each run after 300 steps. The second continues the runs
-with two workers, and `plot` produces the analysis from their completed results.
+with two workers and produces analysis and figures once all runs complete.
 The [configuration guide](../../docs/CONFIGURATION.md#budget-continuation-and-retained-artifacts)
 explains when a run can continue and how other changes affect reuse.
+
+After changing figure settings, regenerate figures without running simulations:
+
+```bash
+ews plot examples/sequential_study/experiment.yml --output outputs/resume-demo
+```
+
+Use `ews analyze` with the same configuration and output directory when changing
+metrics or aggregation and updating summaries from saved results.
 
 ## Try a scientific change
 
