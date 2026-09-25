@@ -16,16 +16,24 @@ class StandaloneGuideTests(unittest.TestCase):
         guide = Path(__file__).resolve().parents[1] / "docs" / "LLM_GUIDE.md"
         snippets = dict(
             re.findall(
-                r"<!-- file: ([\w.]+) -->\s*```(?:python|yaml)\n(.*?)\n```",
+                r"<!-- file: ([\w./]+) -->\s*```(?:python|yaml)\n(.*?)\n```",
                 guide.read_text(encoding="utf-8"),
                 flags=re.DOTALL,
             )
         )
         self.assertEqual(
-            set(snippets), {"algorithms.py", "metrics.py", "experiment.yml", "verify.py"}
+            set(snippets),
+            {
+                "experiment_code/algorithms.py",
+                "experiment_code/metrics.py",
+                "experiment.yml",
+                "verify.py",
+            },
         )
         with tempfile.TemporaryDirectory() as directory:
             project = Path(directory)
+            (project / "experiment_code").mkdir()
+            (project / "experiment_code" / "__init__.py").write_text("", encoding="utf-8")
             for name, content in snippets.items():
                 (project / name).write_text(content + "\n", encoding="utf-8")
             verification = subprocess.run(

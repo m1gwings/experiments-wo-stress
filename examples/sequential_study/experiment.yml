@@ -10,17 +10,17 @@ runs:
     protocol:
       type: online
     data:
-      type: paper:GaussianBandit
+      type: experiment_code.data:GaussianBandit
       params:
         n_arms: 10
         noise_std: 0.1
     algorithms:
       - name: ucb
-        type: paper:UCB
+        type: experiment_code.algorithms:UCB
         params:
           exploration: 0.1
       - name: epsilon_greedy
-        type: paper:EpsilonGreedy
+        type: experiment_code.algorithms:EpsilonGreedy
         params:
           epsilon: 0.1
     grid:

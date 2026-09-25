@@ -32,9 +32,9 @@ class AnalysisTests(unittest.TestCase):
             "study",
             0,
             "algorithm_50%",
-            ComponentSpec("unavailable_paper:Algorithm", {"rate": 0.5}),
-            ComponentSpec("unavailable_paper:Generator", {"size": 10}),
-            ComponentSpec("unavailable_paper:Protocol", {"horizon": 3}),
+            ComponentSpec("unavailable_components:Algorithm", {"rate": 0.5}),
+            ComponentSpec("unavailable_components:Generator", {"size": 10}),
+            ComponentSpec("unavailable_components:Protocol", {"horizon": 3}),
             1234,
         )
         self.settings = {

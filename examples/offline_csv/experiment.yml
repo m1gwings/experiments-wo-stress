@@ -13,7 +13,7 @@ runs:
         skip_header: 1
     algorithms:
       - name: sample_mean
-        type: offline_paper:MeanEstimator
+        type: experiment_code.algorithms:MeanEstimator
 
 analysis:
   metrics:

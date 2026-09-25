@@ -1,8 +1,15 @@
 # Offline CSV study
 
-This example uses the same data-generator interface as the sequential study, with
-a stored dataset and an offline algorithm. It computes the mean and unbiased
-sample variance of the `measurement` column in a small illustrative CSV.
+This study estimates the mean and unbiased sample variance of the `measurement`
+column in a small CSV file. It shows how an offline algorithm uses the same
+data-generator interface as the sequential study, while fitting a complete
+dataset in one protocol step.
+
+[`experiment.yml`](experiment.yml) selects the built-in CSV generator and
+`experiment_code.algorithms:MeanEstimator`, defined in
+[`experiment_code/algorithms.py`](experiment_code/algorithms.py). The CSV path
+is relative to the YAML file. The estimator accepts an injected RNG as part of
+the component contract, although the calculation itself is deterministic.
 
 From the repository root, after `python -m pip install -e .`:
 
@@ -12,31 +19,15 @@ ews analyze examples/offline_csv/experiment.yml --output output/offline
 ews inspect output/offline
 ```
 
-The loader resolves `observations.csv` relative to the configuration file.
-`offline_paper:MeanEstimator` names the class defined beside that file. Its
-constructor accepts the injected RNG even though sample-mean estimation is
-deterministic. `fit(dataset)` returns a mapping of numerical results; the offline
-protocol performs the whole fit as one logical step.
+The protocol loads the data and calls `fit(dataset)` once. That fit returns
+named numerical outputs, which the configured metrics read after execution. The
+CSV generator also saves the input matrix as the run's instance, so later
+analysis can inspect it without loading the estimator. There is one repetition:
+repeating the same deterministic fit on the same data would not add independent
+evidence.
 
-There is only one repetition because repeating a deterministic estimator on the
-same fixed dataset would not provide independent statistical evidence. The
-reported `variance` is the sample variance of the observations, not uncertainty
-across experiment repetitions.
-
-Run the same command again to validate and skip the completed run. If an offline
-fit is interrupted before its single step finishes, it restarts that fit. For
-checkpointing inside a long fit, supply an incremental interaction protocol with
-safe steps.
-
-The generator's persisted instance contains the input matrix as `arrays['data']`
-with CSV source metadata and a content hash. Run results expose that instance
-alongside numerical outputs so custom metrics can inspect it without
-constructing the estimator or generator. Repeating analysis reuses valid caches.
-
-To use another estimator, define a class with `fit`, `state_dict`, and
-`load_state_dict`, then change `algorithms[].type` and its `params` in YAML. To
-replace the CSV source with synthetic data, provide a generator implementing
-`generate(request)`, `state_dict`, and `load_state_dict`. Scientific changes select
-separate retained run variants. This one-step offline protocol does not opt in to
-continuation at larger budgets; a larger requested computation needs its own
-scientific configuration or an incremental protocol.
+A later run validates and reuses the completed result. If execution stops inside
+`fit`, the entire fit starts again because this protocol has one step. For a
+longer computation that needs intermediate checkpoints, use a protocol with
+smaller steps. See [the offline and instance contracts](../../docs/CONFIGURATION.md#instances-and-scientific-components)
+for extending this study.

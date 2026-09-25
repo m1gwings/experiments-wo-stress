@@ -25,9 +25,6 @@ not claim to reproduce any paper.
    from the paper. A successful infrastructure test is not evidence that the paper
    has been reproduced.
 
-No paper-specific facts are supplied by this guide. Never describe its illustrative
-bandit algorithm as an implementation of an unseen paper.
-
 ## Install a pinned library version
 
 Use Python 3.10 or newer and Git. Choose a full Git commit containing the API
@@ -42,19 +39,9 @@ python -m pip install "experiments-wo-stress @ git+https://github.com/m1gwings/e
 python -m pip freeze > requirements.lock.txt
 ```
 
-The library repository is public, so this installation needs no GitHub credentials.
-If a future library revision or another Git dependency is private, configure Git
-access first (for example, authenticate the GitHub CLI and run `gh auth setup-git`).
-Use a credential helper or an SSH identity with read access. Never put a GitHub
-access token in the requirement URL, source files, or lockfile, and never ask the
-LLM to receive the secret. Container builds can use a BuildKit secret for a private
-Git fetch; the runtime image needs no GitHub credentials.
-
-On Windows, activate with `.venv\Scripts\activate`. NumPy and PyYAML are core
-dependencies. For PDF/JPG, change the requirement to
-`experiments-wo-stress[plot] @ git+...`; for Gymnasium, add the `gym` extra.
-Use the complete Git URL above in place of `git+...`. TikZ export needs neither
-Matplotlib nor LaTeX; compiling the exported document needs LaTeX.
+The library repository is public. For PDF/JPG figures, add the `plot` extra to
+the requirement; for Gymnasium, add `gym`. NumPy and PyYAML are core dependencies.
+On Windows, activate with `.venv\Scripts\activate`.
 
 A minimal external repository can look like this:
 
@@ -62,31 +49,33 @@ A minimal external repository can look like this:
 paper-study/
   README.md                  paper references, assumptions, run instructions
   requirements.lock.txt      exact library commit and dependency versions
-  algorithms.py              learning rules and their checkpoint state
-  environments.py            custom generators/adapters when needed
-  metrics.py                 paper metrics, independent of simulation modules
   experiment.yml             scientific choices and execution settings
+  experiment_code/
+    __init__.py
+    algorithms.py            learning rules and their checkpoint state
+    data.py                  custom generators/adapters when needed
+    metrics.py               paper metrics, independent of simulation modules
   verify.py                  repeatability and recovery checks
   outputs/                   generated artifacts, excluded from Git
 ```
 
-Keep the Python modules beside the YAML file, or install the research package.
-The YAML directory is an import context; `algorithms:MyAlgorithm` names an ordinary
-class. Keep simulation and metrics in different modules: source fingerprints cover
-whole module files and their base-class modules. A metric edit in an algorithm's
-module also invalidates that algorithm's simulation variant. Restart Python or
-explicitly reload modules after editing already imported source.
+Keep `experiment_code/` beside the YAML file, or install the research package.
+The YAML directory is an import context, so
+`experiment_code.algorithms:MyAlgorithm` names an ordinary Python class.
+Separate simulation code from metrics so a metric edit need not select a new
+simulation variant. Restart Python after editing already imported modules.
 
 ## A runnable API example
 
-Copy the following three files beside each other. The scientific code needs only
+Copy the following files into the indicated paths, creating an empty
+`experiment_code/__init__.py` to make the package explicit. The scientific code needs only
 NumPy in addition to the library. It compares two exploration probabilities on two
 Gaussian bandit sizes, with three independent repetitions: 12 short runs. These
 are illustrative settings, not paper-derived recommendations.
 
-`algorithms.py`:
+`experiment_code/algorithms.py`:
 
-<!-- file: algorithms.py -->
+<!-- file: experiment_code/algorithms.py -->
 ```python
 import numpy as np
 
@@ -131,9 +120,9 @@ class EpsilonGreedy:
         self.sums = np.array(state["sums"], copy=True)
 ```
 
-`metrics.py`:
+`experiment_code/metrics.py`:
 
-<!-- file: metrics.py -->
+<!-- file: experiment_code/metrics.py -->
 ```python
 import numpy as np
 
@@ -170,10 +159,10 @@ runs:
       params: {n_arms: 3, noise_std: 0.1}
     algorithms:
       - name: epsilon_010
-        type: algorithms:EpsilonGreedy
+        type: experiment_code.algorithms:EpsilonGreedy
         params: {epsilon: 0.1}
       - name: epsilon_030
-        type: algorithms:EpsilonGreedy
+        type: experiment_code.algorithms:EpsilonGreedy
         params: {epsilon: 0.3}
     grid:
       data.params.n_arms: [3, 5]
@@ -190,7 +179,7 @@ recording:
 analysis:
   metrics:
     - {name: regret, type: pseudo_regret}
-    - {name: mean_reward, type: 'metrics:MeanReward'}
+    - {name: mean_reward, type: 'experiment_code.metrics:MeanReward'}
   aggregator:
     type: repeated_runs
     group_by: [data.params.n_arms, algorithm.name]
@@ -276,7 +265,8 @@ schedule creates a new scientific instance and run.
   when unnecessary. It calls `fit(data.generate(request))` as one step; omit an
   online budget. `csv` accepts `path`, `delimiter`, `skip_header`, and `dtype`;
   paths are relative to YAML. `normal` accepts `size`, `loc`, and `scale`.
-- **Callable trial:** use `protocol.type: trial`, with `params.function: trials:run`
+- **Callable trial:** use `protocol.type: trial`, with
+  `params.function: experiment_code.trials:run`
   and optional nested `params.params`. The function is
   `run(*, algorithm, data, rng, **params)` and returns numerical output. Placeholder
   components are `data: {type: 'null'}` and an algorithm with `type: null_algorithm`.
@@ -313,7 +303,7 @@ data:
   params:
     factory: gymnasium:make
     env_params: {id: CartPole-v1}
-    state_adapter: environments:CartPoleState
+    state_adapter: experiment_code.data:CartPoleState
 ```
 
 The paper supplies `CartPoleState`, with a zero-argument constructor,
@@ -324,70 +314,56 @@ use whole episodes/trials as explicit restartable units or another supported mod
 
 ## Seeds, budgets, and recording
 
-The experiment seed creates four separated streams: instance, data, algorithm,
-and protocol. Each component may override its root with YAML `seed`. Streams are
-stable across workers, scheduling, grid order, budgets, and recording frequency.
-Instance/data identities exclude algorithm choice, permitting shared problem
-instances across algorithms. Equal seeds alone do not force equal trajectories
-when actions affect the environment.
+The experiment seed supplies separate streams for instance generation, data,
+algorithm, and protocol. A component may override its root with YAML `seed`.
+Streams stay stable across worker counts, scheduling, grid order, budgets, and
+recording frequency. Algorithms can share a saved instance while producing
+different trajectories if their actions affect the environment.
 
-`budget.steps` is execution length. A paper's horizon used inside a learning rule
-belongs in scientific parameters, for example `algorithm.params.design_horizon`.
-Do not confuse those two values. Budget continuation requires all three runtime
-components to declare `supports_extension = True` and behave consistently when
-continued. Otherwise a changed budget selects a new variant. The example's policy
-is independent of budget, so continuation is appropriate.
+`budget.steps` is execution length. A horizon used by a learning rule belongs in
+its scientific parameters. To continue at a larger budget, the algorithm,
+generator, and protocol must all declare `supports_extension = True` and save
+sufficient state. Otherwise a changed budget selects a new variant.
 
-`recording.fields` selects measurements; `null` saves all. `step` is automatic.
-Values must maintain a numerical dtype and shape. Record every step when a metric
-needs a full trajectory. Extendable sparse runs record scheduled multiples only:
-an interval of 10 at budget 23 saves steps 10 and 20. Missing actions cannot be
-recovered by summing a subsample or by regenerating a figure.
-
-Buffers default to 16 MiB per active run, plus scientific state and serialization.
-Results flush by byte budget, before checkpoints, and at completion. Checkpoints
-default to 120 seconds; `checkpoint_steps` adds a step trigger. Compression is
-optional and defaults to false. Rolling checkpoints are retained in addition to
-completed-budget endpoint snapshots. Dense summary CSV/cache/export copies can
-consume more disk than raw trajectories.
+`recording.fields` selects measurements; `null` saves all, and `step` is automatic.
+Record every step when a metric needs a complete trajectory. A sparse recording
+cannot later supply missing actions or rewards. Recorded values need stable
+numerical dtypes and shapes. Checkpoints occur between complete protocol steps;
+an offline fit or trial restarts its step if interrupted inside the call.
 
 ## Metrics, figures, and custom planning
 
-A metric constructor receives only its configured `params`, and
-`compute(result) -> MetricResult(x, values)` returns a finite real scalar or
-matching one-dimensional arrays. `RunResult` is a mapping of recorded arrays with
-attributes `instance`, `spec`, `completed_steps`, `revision`, and `final_outputs`.
-Final outputs expose the final recorded fields of single-step offline/trial runs;
-there is no arbitrary final-output hook for multistep algorithms.
+A metric receives configured `params` and implements
+`compute(result) -> MetricResult(x, values)`. `RunResult` exposes recorded fields,
+`instance`, `spec`, `completed_steps`, `revision`, and `final_outputs`. The latter
+contains final recorded values for single-step offline and trial runs. Declare
+`required_fields`, `required_instance_fields`, or `requires_complete_trajectory`
+when the calculation needs them.
 
-Declare `required_fields`, `required_instance_fields`, and
-`requires_complete_trajectory` as needed. Built-ins include `field`,
-`cumulative_sum`, `pseudo_regret`, and `realized_regret`. Pseudo-regret requires
-complete actions and instance `means` of shape arms or time-by-arms. Its `dynamic`
-comparator uses the best arm each round; `best_fixed` uses the best fixed arm over
-each prefix. Realized regret instead requires saved counterfactual rewards for all
-arms, consistent with the observed rewards; means alone cannot determine it.
+Built-in metrics include `field`, `cumulative_sum`, `pseudo_regret`, and
+`realized_regret`. Pseudo-regret uses saved actions and instance `means`, with a
+`dynamic` or `best_fixed` comparator. Realized regret instead requires saved
+counterfactual rewards for every arm; means alone cannot determine it. Inspect the
+paper's comparator and what data it requires before choosing a metric.
 
-`repeated_runs` groups compatible results and averages independent repetitions.
-Include varying scientific parameters in `group_by`. Coordinates must align;
-duplicate repetitions and incompatible pooling are rejected. Uncertainty is
+`repeated_runs` averages compatible independent repetitions. Include varying
+scientific parameters in `group_by`; coordinates must align. Uncertainty may be
 `standard_error`, sample `std`, or `none`. One repetition has undefined sample
-uncertainty. A standard-error band is not a confidence interval.
+uncertainty, and a standard-error band is not a confidence interval. Line figures
+can group curves by `color` and panels by `panel`; PDF/JPG need the `plot` extra,
+while TikZ export does not require LaTeX until compilation. A custom plotter uses
+`type: experiment_code.figures:MyPlotter` and implements
+`plot(summaries, figure, output_dir) -> Iterable[Path]`.
+Each summary provides its metric, group labels, coordinates, mean, uncertainty,
+repetition count, and uncertainty convention.
 
-Line figures accept `metric`, `color`, `panel`, `panel_label`, `xlabel`, `ylabel`,
-`title`, `formats`, and `xscale`/`yscale` (`linear` or `log`). Custom plotters use
-`type: figures:MyPlotter`, configured `params`, and
-`plot(summaries, figure, output_dir) -> Iterable[Path]`. Summary attributes include
-`metric`, `labels`, `x`, `mean`, `uncertainty`, `count`, and `uncertainty_kind`.
-
-Grid paths are `data.params.*`, `algorithm.params.*`, and `protocol.params.*`,
-expanded as a Cartesian product with algorithms and repetitions. Separate groups
-when algorithms need different sweep parameters. A custom planner has a zero-arg
-constructor and `plan(group, seed) -> Iterable[RunSpec]`; select it with
-`planner: planning:MyPlanner`. Use the public `make_run_spec` helper with
-`group`, `repetition`, `algorithm_name`, `algorithm`, `data`, `protocol`, `seed`,
-and optional `budget_steps`; component arguments are `ComponentSpec` or mappings.
-Preserve the supplied group and seed and keep planning deterministic.
+Grid axes under `algorithm.params.*`, `data.params.*`, or `protocol.params.*`
+combine with algorithms and repetitions. Separate groups when algorithms need
+different sweeps. A custom planner selected with
+`planner: experiment_code.planning:MyPlanner` implements
+`plan(group, seed) -> Iterable[RunSpec]`. Use the public `make_run_spec` helper
+with `group`, `repetition`, `algorithm_name`, `algorithm`, `data`, `protocol`,
+`seed`, and optional `budget_steps`. Keep planning deterministic.
 
 ## Run, reuse, inspect, and clean
 
@@ -395,78 +371,29 @@ Preserve the supplied group and seed and keep planning deterministic.
 ews plan experiment.yml
 ews run experiment.yml --output outputs/study --workers 2
 ews build experiment.yml --output outputs/study --workers 2
+ews inspect outputs/study
 ews analyze experiment.yml --output outputs/study
 ews plot experiment.yml --output outputs/study
-ews inspect outputs/study
 ews clean outputs/study --scope inactive
 ```
 
-`build` runs execution and configured analysis together. Execution returns counts
-of completed, skipped, paused, failed, and pending runs. Failed runs have inspectable
-errors. Increasing a compatible budget reuses saved final state; a smaller request
-selects a recorded prefix. Scientific, code, environment, input, and recording
-changes select retained variants rather than silently mixing results. The active
-request identifies which variants and boundaries analysis uses.
+`build` executes the study and produces configured analysis. `run` performs only
+execution; `analyze` and `plot` work from saved results. Compatible completed work
+is reused, while changes to scientific settings, code, tracked inputs, or recording
+retain separate variants. The active request selects the results for analysis.
+Declare external inputs in YAML component `dependencies` or class
+`dependency_files` so their changes are tracked.
 
-Artifacts include request metadata, immutable instances, per-run chunks,
-checkpoints, progress, rotating logs, and analysis. Completed work is validated
-before reuse; corrupt checkpoints can fall back to a preceding valid generation.
-Recovery removes uncommitted observations before replay. A forced termination can
-lose work since the previous commit. Stopping normally saves at the next safe step.
+Cleanup is a preview until `--yes` is supplied. Scopes are `analysis`,
+`checkpoints`, `inactive`, `runs`, and `all`. Removing checkpoints loses the
+ability to continue those runs, although saved observations remain. Keep source,
+inputs, and generated output in separate locations.
 
-Metrics, aggregates, and figures have separate validated caches. Figure changes
-need not rerun simulation or unaffected metrics. YAML component `dependencies`
-are paths relative to the configuration. Class `dependency_files` are relative to
-the class module; declare helper code and external inputs the framework cannot
-infer. Untracked external-library changes can invalidate scientific reproducibility
-even when declared cache inputs are unchanged.
-
-Cleanup defaults to a preview. Add `--yes` only for intended deletion. Scopes are
-`analysis`, `checkpoints`, `inactive`, `runs`, and `all`; repeat `--run-id ID` to
-restrict `runs` or `checkpoints`. Removing checkpoints loses continuation state;
-analysis artifacts can be rebuilt from retained observations and instances.
-Execution and cleanup share a lock; analysis does not, so clean while analysis is
-idle. This is local execution/storage, not a distributed scheduler.
-
-## A small cloud machine and optional Discord updates
-
-A cloud VM can run the same commands as a laptop. Use persistent local/block
-storage with ordinary filesystem locking and atomic replacement, a pinned software
-environment, and a process/session manager so an SSH disconnect does not end the
-job. Start with one worker; add workers only within the VM's CPU and memory budget.
-An object-store URL is not an output directory. Copy completed or quiescent whole
-artifact directories to external storage for backup.
-
-Exact portability is narrower than file portability. Provenance includes Python,
-NumPy, PyYAML, platform identity, code, and tracked input paths/content. Moving to
-a different VM or path layout can select new variants instead of resuming old
-ones. Do not promise arbitrary cross-host exact continuation; plan cloud runs in
-their intended environment and validate any migration.
-
-Notifications are optional. Add this root YAML section only when requested:
-
-```yaml
-notifications:
-  discord:
-    enabled: true
-    webhook_env: EWS_DISCORD_WEBHOOK_URL
-    interval_seconds: 300
-    timeout_seconds: 5
-```
-
-Supply the webhook through that environment variable using the host's secret
-configuration. Do not place its URL in YAML, source, logs, or the repository.
-Omitting the section or setting `enabled: false` disables notifications without
-reading the variable. An enabled configuration with a missing or invalid webhook
-fails before execution. HTTP delivery failures do not fail scientific runs.
-
-Updates cover the execution stage of `run` and `build`: start, periodic summaries,
-and completion, pause, failure, or abort. Separate analysis/plotting is not notified.
-Periodic progress uses counts and recent durable checkpoints, not continuously
-sampled in-memory step counts. Payloads omit parameters, paths, numerical data,
-tracebacks, and secrets. Delivery is best effort, including the final message;
-rate limits or outages can prevent it. Persisted artifacts remain authoritative.
-Notification settings do not change simulation identities or seeds.
+For a small cloud deployment, run the same study on one VM with persistent local
+or block storage and a pinned environment. Begin and resume execution in the
+environment where compatibility will be checked; a container image alone does
+not guarantee exact checkpoint reuse across hosts. Notifications are optional
+and use a webhook supplied through an environment variable.
 
 ## Verify direct execution against recovery
 

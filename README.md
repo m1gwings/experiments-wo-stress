@@ -1,37 +1,34 @@
 # Experiments W/O Stress
 
-Repeatable numerical experiments, from a YAML study to publication figures.
-
-Define algorithms and scientific interactions in ordinary Python. Experiments W/O
-Stress manages independent runs, generated instances, checkpointing, saved
-observations, and analysis. The intended scale is a laptop or modest multicore
-machine.
-
-**Status: experimental implementation.** The examples and tests exercise the full
-workflow; the public API still needs validation in a real paper project.
+*Experiments W/O Stress* is a Python library designed to ease the process of
+running numerical experiments for Machine Learning papers and producing plots.
+The rationale is simple: you specify the baselines, the data-generating
+mechanism, and the interaction protocol; the library takes care of the rest,
+providing stable **YAML configurations**, efficient **checkpoint management**,
+**parallel execution** over a pool of workers, **reproducibility** through
+explicit seeding of each component, *etc.*.
 
 ## What it provides
 
-- A common interface for synthetic data, stored CSV datasets, and evolving
-  environments, with online, offline, callable-trial, and reinforcement-learning
-  interaction helpers.
-- Parameter grids, independent repetitions, and custom run planners.
-- Independent instance, algorithm, environment, and protocol RNGs, reproducible
-  across execution order and worker counts.
-- Saved instances, selected numerical observations, rotating run logs, and recovery
-  from committed checkpoints.
-- Continued execution at larger budgets when components support it, with previous
-  requests and recording variants retained.
-- Metrics computed from observations and instances, cached aggregation, and PDF,
-  JPG, and editable TikZ/PGFPlots figures.
-- Reusable bandit settings and an optional Gymnasium adapter.
-- Container deployment guidance and optional Discord progress notifications.
+- **A study in YAML.** Define algorithms, parameter grids, repetitions,
+  recording, metrics, and figures in a version-controlled configuration.
+- **Reproducible local execution.** Run independent simulations with explicit
+  random streams, one worker or a small process pool.
+- **Checkpoints and reuse.** Resume interrupted work and reuse compatible runs
+  and analysis when you return to a study.
+- **Several interaction styles.** Use built-in online, offline, trial, or
+  reinforcement-learning protocols with your own scientific components. Bandit,
+  CSV, and Gymnasium data helpers are available.
+- **Analysis after execution.** Compute metrics from saved observations and
+  instances, aggregate repetitions, and export PDF, JPG, or editable TikZ
+  figures.
+- **Operational tools.** Plan and inspect runs from the CLI, receive optional
+  Discord progress messages, and use the same workflow on a Linux VM.
 
 ## Install
 
-Python 3.10 or newer is required. The package is currently distributed from its
-public GitHub repository; there is no package-index release. In a separate study
-repository, install it directly from Git:
+Python 3.10 or newer is required. Install the library from its public Git
+repository:
 
 ```bash
 python -m pip install 'experiments-wo-stress[plot] @ git+https://github.com/m1gwings/experiments-wo-stress.git@main'
@@ -39,25 +36,61 @@ python -m pip install 'experiments-wo-stress[plot] @ git+https://github.com/m1gw
 
 Replace `main` with a full commit hash for a reproducible study. Git must be
 available during installation. The package name uses hyphens; Python imports use
-underscores (`import experiments_wo_stress`). Installation also provides the `ews`
-command. From a local checkout, use an editable installation instead:
+underscores (`import experiments_wo_stress`). Installation also provides the
+`ews` command.
 
-```bash
-python -m venv .venv
-source .venv/bin/activate
-python -m pip install -e '.[plot]'
-```
-
-On Windows, activate with `.venv\Scripts\activate`. The core needs NumPy and
-PyYAML. The `plot` extra supplies Matplotlib for PDF/JPG; TikZ source export needs
-neither Matplotlib nor LaTeX. The `gym` extra installs Gymnasium for its adapter.
-
-## Build a study
+## A quick-starter
 
 The [sequential example](examples/sequential_study/README.md) compares UCB and
-epsilon-greedy on three Gaussian bandit sizes, with 20 repetitions per combination.
-It saves arm means as an instance and records actions and rewards. Regret is
-computed afterward by a metric, independently of the simulation.
+epsilon-greedy on Gaussian bandits with 10, 20, and 50 arms. Its configuration
+selects the scientific components and describes how to run and analyze them:
+
+```yaml
+name: gaussian_bandit_comparison
+seed: 2026
+runs:
+  - name: main
+    planner: grid
+    repetitions: 20
+    budget: {steps: 1000}
+    protocol: {type: online}
+    data:
+      type: experiment_code.data:GaussianBandit
+      params: {n_arms: 10, noise_std: 0.1}
+    algorithms:
+      - name: ucb
+        type: experiment_code.algorithms:UCB
+        params: {exploration: 0.1}
+      - name: epsilon_greedy
+        type: experiment_code.algorithms:EpsilonGreedy
+        params: {epsilon: 0.1}
+    grid:
+      data.params.n_arms: [10, 20, 50]
+
+execution: {workers: 1}
+recording: {every_steps: 1, fields: [action, reward]}
+analysis:
+  metrics:
+    - {name: regret, type: pseudo_regret}
+  aggregator:
+    group_by: [data.params.n_arms, algorithm.name]
+    uncertainty: standard_error
+  figures:
+    - type: line
+      metric: regret
+      color: algorithm.name
+      panel: data.params.n_arms
+      formats: [pdf, jpg, tikz]
+```
+
+The grid combines three bandit sizes with two algorithms and 20 independent
+repetitions, producing 120 runs. The classes under `experiment_code/` define the
+bandit and learning rules; the library handles execution and storage. Recorded
+actions and rewards, together with the saved bandit instance, support regret
+analysis afterward.
+
+From the repository root, inspect the plan, execute the study, and inspect its
+output:
 
 ```bash
 ews plan examples/sequential_study/experiment.yml
@@ -65,56 +98,60 @@ ews build examples/sequential_study/experiment.yml --output outputs/bandits --wo
 ews inspect outputs/bandits
 ```
 
-`build` executes the selected runs and produces the analysis configured in YAML.
-Figures are in `outputs/bandits/analysis/figures/`. Repeating the command validates
-and reuses available execution and analysis artifacts.
+`plan` validates and expands the study without running it. `build` runs the
+simulations and produces the configured analysis and figures in
+`outputs/bandits/analysis/figures/`. Compatible work is reused on a later build.
+Use `ews run` when you want execution alone, then `ews analyze` or `ews plot` to
+work with saved results. The [configuration guide](docs/CONFIGURATION.md)
+explains recording, budgets, and reuse in detail.
 
-For deliberate interruption and resumption:
+The [offline CSV example](examples/offline_csv/README.md) uses a stored dataset
+and performs one estimator fit per run.
 
-```bash
-ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --max-steps 250
-ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --workers 2
-ews plot examples/sequential_study/experiment.yml --output outputs/resume-demo
+## Suggested setup
+
+Keep the paper's scientific code and YAML in a separate repository, with this
+library installed at a pinned revision:
+
+```text
+my-paper/
+├── experiment.yml
+├── experiment_code/
+│   ├── __init__.py
+│   ├── algorithms.py
+│   ├── data.py
+│   └── metrics.py
+└── data/
 ```
 
-Increase a group's `budget.steps` to continue compatible components from their saved
-final state. A different recording selection retains another variant. Scientific
-or implementation changes select affected work again while preserving existing
-artifacts. The active request tells analysis which results to use.
+Use only the modules your study needs. A component path such as
+`experiment_code.algorithms:MyAlgorithm` refers to a class in that package.
+See [the extension interfaces](docs/CONFIGURATION.md#instances-and-scientific-components)
+and the [standalone LLM guide](docs/LLM_GUIDE.md) if you are implementing a
+study from a paper PDF.
 
-The [CSV example](examples/offline_csv/README.md) demonstrates the same generator
-interface with a stored dataset and an offline estimator.
+### Cloud execution
 
-## Standalone projects, cloud runs, and LLM assistance
+Run the same commands on a Linux VM with persistent storage for the output
+directory. The [cloud guide](docs/CLOUD.md) walks through a pinned container
+build, execution, and recovery on one VM.
 
-Keep paper algorithms, custom metrics, and YAML in a separate repository and install
-this library at a pinned Git commit. A single Linux VM with a container and a
-persistent disk fits the existing process-worker design. The [cloud guide](docs/CLOUD.md)
-includes a Docker template, resource sizing, checkpoint recovery, and current
-provider tradeoffs. Moving checkpoints between different environments is not
-necessarily compatible; start cloud runs in the environment you will resume.
+### LLM-assisted implementation
 
-For assisted implementation, upload [the standalone LLM guide](docs/LLM_GUIDE.md)
-alongside the paper PDF. It contains the public extension contracts, a complete
-copyable study, YAML and CLI entry points, and scientific validation instructions.
-It is intended to be useful without uploading the rest of this repository.
+The [standalone LLM guide](docs/LLM_GUIDE.md) can be given to an assistant
+alongside a paper PDF. It includes a runnable study, the scientific component
+contracts, and validation steps without requiring the rest of this repository.
 
-To receive Discord summaries during the execution stage:
+## Discord notifications
 
-```yaml
-notifications:
-  discord:
-    webhook_env: EWS_DISCORD_WEBHOOK_URL
-    interval_seconds: 300
-```
-
-Set that environment variable through your shell or cloud secret store; keep the
-webhook URL out of the repository. Updates report run counts and the latest durable
-checkpoints. Network failures do not fail runs. Notifications are optional and do
-not change scientific identities or random streams. See the
-[configuration guide](docs/CONFIGURATION.md#discord-notifications) for delivery limits.
+Long runs can send optional progress summaries to a Discord webhook. Configure
+the webhook through an environment variable; keep its URL out of YAML and source
+control. See [Discord notifications](docs/CONFIGURATION.md#discord-notifications) for setup
+and delivery behavior.
 
 ## Python API
+
+The same study can be run from Python:
 
 ```python
 from experiments_wo_stress import load_config, run_experiment
@@ -128,43 +165,29 @@ if __name__ == "__main__":
         plot(config, "outputs/bandits")
 ```
 
-The main guard is needed when starting worker processes. Use one worker for a
-simple sequential session. Paper components receive their RNGs explicitly and can
-write diagnostics through the logger attached to each run component.
+The main guard is needed when starting multiple worker processes.
 
 ## Commands
 
 | Command | Purpose |
 | --- | --- |
-| `ews plan CONFIG` | Validate configuration and display the run plan. |
-| `ews build CONFIG --output DIR` | Execute and produce configured analysis. |
-| `ews run CONFIG --output DIR` | Execute or resume; accepts `--workers` and `--max-steps`. |
-| `ews inspect DIR` | Inspect active work and stored result validity. |
-| `ews analyze CONFIG --output DIR` | Compute or reuse metric and aggregate artifacts. |
-| `ews plot CONFIG --output DIR` | Compute or reuse analysis and configured figures. |
-| `ews clean DIR --scope inactive` | Preview cleanup of variants outside the active request. |
-
-Cleanup is a dry run unless `--yes` is supplied. Scopes include analysis caches,
-checkpoints, inactive variants, selected runs, or all artifacts. Removing state
-prevents continuing those runs, even if their numerical results remain available.
-
-Recording controls which future analyses are possible. A cumulative metric needs
-the complete underlying trajectory; sparse observations cannot recover missing
-actions or rewards. Checkpoints occur between protocol steps, so a single long
-`fit()` or trial needs incremental support to resume within that operation.
+| `ews plan CONFIG` | Validate the configuration and show its runs. |
+| `ews build CONFIG --output DIR` | Execute the study and produce configured analysis. |
+| `ews run CONFIG --output DIR` | Execute or resume runs. |
+| `ews inspect DIR` | Inspect stored status and artifacts. |
+| `ews analyze CONFIG --output DIR` | Compute or reuse metrics and summaries. |
+| `ews plot CONFIG --output DIR` | Produce configured figures from analysis. |
+| `ews clean DIR --scope inactive` | Preview cleanup of retained artifacts. |
 
 ## Documentation and development
 
-- [Standalone guide for LLM-assisted experiments](docs/LLM_GUIDE.md)
-- [Cloud execution and container template](docs/CLOUD.md)
-- [Configuration and extension guide](docs/CONFIGURATION.md)
-- [Architecture and artifact contracts](docs/ARCHITECTURE.md)
-- [Project goals](docs/PROJECT_BRIEF.md)
-- [Development workflow](docs/BUILD_WORKFLOW.md)
-- [Contributing](CONTRIBUTING.md)
-
-Keep code, documentation, and executable examples consistent. Run
-`python scripts/check_docs.py --examples --cli` alongside the relevant tests;
-this verifies mechanical references and supported examples, while review verifies
-scientific meaning. Generated experiments, caches, and build products stay out of
-version control.
+- [Configuration and extension guide](docs/CONFIGURATION.md) — YAML, component
+  contracts, and user-facing rules.
+- [Architecture](docs/ARCHITECTURE.md) — identities, artifacts, storage, and
+  recovery.
+- [Cloud guide](docs/CLOUD.md) — deployment of an existing study on one VM.
+- [Standalone LLM guide](docs/LLM_GUIDE.md) — context for implementing a paper
+  study.
+- [Project brief](docs/PROJECT_BRIEF.md) — goals and scope.
+- [Contributing](CONTRIBUTING.md) and
+  [development workflow](docs/BUILD_WORKFLOW.md) — working on the library.

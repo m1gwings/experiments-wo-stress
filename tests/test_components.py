@@ -159,9 +159,9 @@ class ConfigurationTests(unittest.TestCase):
         self.assertIsNot(rebuilt.data.params, run.data.params)
 
     def test_loading_custom_planner_does_not_import_it(self):
-        self.document["runs"][0]["planner"] = "unavailable_paper.planners:SubsetPlanner"
+        self.document["runs"][0]["planner"] = "unavailable_components.planners:SubsetPlanner"
         config = self.load()
-        self.assertEqual(config.runs[0]["planner"], "unavailable_paper.planners:SubsetPlanner")
+        self.assertEqual(config.runs[0]["planner"], "unavailable_components.planners:SubsetPlanner")
 
     def test_grid_order_workers_and_analysis_do_not_change_identity(self):
         original = self.load()

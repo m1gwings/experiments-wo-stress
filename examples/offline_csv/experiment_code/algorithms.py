@@ -1,4 +1,4 @@
-"""A minimal paper-owned estimator used with the library's CSV generator."""
+"""A minimal study-specific estimator used with the library's CSV generator."""
 
 from __future__ import annotations
 

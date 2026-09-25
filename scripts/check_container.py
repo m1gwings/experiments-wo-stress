@@ -26,9 +26,9 @@ runs:
     repetitions: 2
     budget: {steps: 20}
     protocol: {type: online}
-    data: {type: 'paper:GaussianBandit', params: {n_arms: 3}}
+    data: {type: 'experiment_code.data:GaussianBandit', params: {n_arms: 3}}
     algorithms:
-      - {name: ucb, type: 'paper:UCB'}
+      - {name: ucb, type: 'experiment_code.algorithms:UCB'}
 execution: {workers: 2}
 recording: {every_steps: 1, fields: [action, reward]}
 analysis:
@@ -88,9 +88,11 @@ def main() -> int:
         for source, target in (
             ("deploy/Dockerfile.example", "Dockerfile"),
             ("deploy/.dockerignore.example", ".dockerignore"),
-            ("examples/sequential_study/paper.py", "paper.py"),
         ):
             shutil.copyfile(root / source, study / target)
+        shutil.copytree(
+            root / "examples/sequential_study/experiment_code", study / "experiment_code"
+        )
         (study / "experiment.yml").write_text(CONFIG, encoding="utf-8")
         (study / "requirements.in").write_text(
             "numpy>=1.24\nPyYAML>=6.0\nsetuptools>=68\nwheel\n", encoding="utf-8"

@@ -25,9 +25,10 @@ class ExecutionTests(unittest.TestCase):
         self.root = Path(self.temporary.name)
         self.study = self.root / "study"
         self.study.mkdir()
-        self.module_name = f"paper_{self._testMethodName}"
-        shutil.copy(
-            EXAMPLES / "sequential_study" / "paper.py", self.study / f"{self.module_name}.py"
+        self.package_name = f"experiment_code_{self._testMethodName}"
+        shutil.copytree(
+            EXAMPLES / "sequential_study" / "experiment_code",
+            self.study / self.package_name,
         )
         self.settings = {
             "name": "integration",
@@ -38,12 +39,19 @@ class ExecutionTests(unittest.TestCase):
                     "planner": "grid",
                     "repetitions": 2,
                     "protocol": {"type": "online", "params": {"horizon": 13}},
-                    "data": {"type": f"{self.module_name}:GaussianBandit", "params": {"n_arms": 4}},
+                    "data": {
+                        "type": f"{self.package_name}.data:GaussianBandit",
+                        "params": {"n_arms": 4},
+                    },
                     "algorithms": [
-                        {"name": "ucb", "type": f"{self.module_name}:UCB", "params": {"n_arms": 4}},
+                        {
+                            "name": "ucb",
+                            "type": f"{self.package_name}.algorithms:UCB",
+                            "params": {"n_arms": 4},
+                        },
                         {
                             "name": "epsilon",
-                            "type": f"{self.module_name}:EpsilonGreedy",
+                            "type": f"{self.package_name}.algorithms:EpsilonGreedy",
                             "params": {"n_arms": 4, "epsilon": 0.25},
                         },
                     ],
@@ -144,7 +152,7 @@ class ExecutionTests(unittest.TestCase):
         config = self.config(self.one_run())
         output = self.root / "output"
         self.assertEqual(run_experiment(config, output, max_steps=4).paused, 1)
-        source = self.study / f"{self.module_name}.py"
+        source = self.study / self.package_name / "algorithms.py"
         original_source = source.read_text(encoding="utf-8")
         source.write_text(
             original_source + "\n# A changed scientific implementation.\n",
@@ -158,13 +166,18 @@ class ExecutionTests(unittest.TestCase):
     def test_changed_csv_contents_select_new_variant(self) -> None:
         source = self.study / "input.csv"
         source.write_text("1.0\n2.0\n3.0\n", encoding="utf-8")
-        module = "offline_input_change"
-        shutil.copy(EXAMPLES / "offline_csv" / "offline_paper.py", self.study / f"{module}.py")
+        shutil.copytree(
+            EXAMPLES / "offline_csv" / "experiment_code",
+            self.study / self.package_name,
+            dirs_exist_ok=True,
+        )
         settings = self.one_run()
         group = settings["runs"][0]
         group["protocol"] = {"type": "offline"}
         group["data"] = {"type": "csv", "params": {"path": "input.csv"}}
-        group["algorithms"] = [{"name": "mean", "type": f"{module}:MeanEstimator"}]
+        group["algorithms"] = [
+            {"name": "mean", "type": f"{self.package_name}.algorithms:MeanEstimator"}
+        ]
         config = self.config(settings)
         output = self.root / "output"
         self.assertEqual(run_experiment(config, output).completed, 1)
@@ -220,7 +233,7 @@ class ExecutionTests(unittest.TestCase):
         module = self.study / "failure_component.py"
         module.write_text(
             "from pathlib import Path\n"
-            f"from {self.module_name} import UCB\n\n"
+            f"from {self.package_name}.algorithms import UCB\n\n"
             "class FailOnce(UCB):\n"
             "    def __init__(self, *, rng, marker, **params):\n"
             "        super().__init__(rng=rng, **params)\n"

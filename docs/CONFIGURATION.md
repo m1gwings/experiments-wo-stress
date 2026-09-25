@@ -3,8 +3,9 @@
 Start with the [complete sequential configuration](../examples/sequential_study/experiment.yml).
 YAML describes a study; Python classes supply scientific behavior. Load a file with
 `load_config(path)` or an `ews` command. Classes are selected explicitly through
-built-in aliases or `module:Class` paths. The configuration directory is added to
-Python's import context.
+built-in aliases or `module:Class` paths. Keep study-specific classes in an
+`experiment_code/` package beside the YAML file. The configuration directory is
+added to Python's import context.
 
 ## Experiment and run groups
 
@@ -18,21 +19,21 @@ runs:
     budget: {steps: 1000}
     protocol: {type: online}
     data:
-      type: paper:GaussianBandit
+      type: experiment_code.data:GaussianBandit
       params: {n_arms: 10, noise_std: 0.1}
     algorithms:
       - name: ucb
-        type: paper:UCB
+        type: experiment_code.algorithms:UCB
         params: {exploration: 0.1}
       - name: epsilon_greedy
-        type: paper:EpsilonGreedy
+        type: experiment_code.algorithms:EpsilonGreedy
         params: {epsilon: 0.1}
     grid:
       data.params.n_arms: [10, 20, 50]
 ```
 
-Place this file beside the example's `paper.py`. Its grid expands to 3 sizes ×
-2 algorithms × 20 repetitions. A group has these settings:
+Place this file beside the example's `experiment_code/` package. Its grid
+expands to 3 sizes × 2 algorithms × 20 repetitions. A group has these settings:
 
 | Setting | Meaning |
 | --- | --- |
@@ -51,12 +52,11 @@ file. Algorithm names default to the final part of their type path and must be
 unique within a group. Parameters use plain finite YAML values, lists, and
 string-keyed mappings. Duplicate keys and unknown framework settings are rejected.
 
-`ComponentSpec.dependencies` holds the resolved dependency paths. A scientific
-class can also declare `dependency_files`, resolved relative to its source module.
-Source tracking covers full module files and base-class modules. Keep metrics and
-simulation components in separate files when a metric edit should preserve the
-simulation cache. Start a fresh Python process or explicitly reload modules after
-editing source that a live process has already imported.
+Declare scientific input files in component `dependencies` (relative to the YAML)
+or class `dependency_files` (relative to the module). These files participate in
+reuse decisions. Keep metrics and simulation code in separate modules when their
+changes should be independent; [the architecture](ARCHITECTURE.md#reproducibility)
+explains source fingerprints.
 
 Grid paths address `algorithm.params.*`, `data.params.*`, or `protocol.params.*`.
 An algorithm axis applies to every algorithm in its group; separate groups can
@@ -64,132 +64,11 @@ sweep different parameters. Grid axes are a Cartesian product. Duplicate candida
 and overlapping paths are rejected. Custom planners must produce deterministic
 run specifications.
 
-Execution budget is separate from a scientific horizon parameter. Built-in online
-protocol configurations written with legacy `params.horizon` are normalized into
-the budget; conflicting explicit settings are rejected. An algorithm that uses a
-fixed horizon in its learning rule must retain that as a scientific parameter.
-
-## Execution, logs, and recording
-
-```yaml
-execution:
-  workers: 1
-  checkpoint_seconds: 120.0
-  checkpoint_steps: null
-  keep_checkpoints: 2
-  compression: false
-  logging_level: INFO
-  log_max_bytes: 2097152
-  log_backups: 2
-
-recording:
-  every_steps: 1
-  fields: null
-  buffer_bytes: 16777216
-```
-
-`--workers` overrides the worker setting. One worker executes sequentially in the
-current process. Python scripts launching multiple workers need the usual
-`if __name__ == "__main__":` guard.
-
-A checkpoint is due when either enabled time or step trigger is reached. `null`
-disables that trigger. A pause, graceful interruption, and completion also save
-state. Rolling checkpoint retention is additional to snapshots pinned by completed
-budget boundaries. Compression trades CPU work for storage space.
-
-Run components receive a standard Python logger as `self.logger`. Use parameterized
-messages such as `self.logger.debug("round=%d", self.round)` rather than worker
-prints. Logs rotate at the configured byte threshold and retain the specified
-backups. These operational settings do not change scientific identities or streams.
-
-`fields: null` saves all measurements; a list selects fields. The recorder adds
-`step` automatically and requires consistent numerical dtype and shape for each
-field. Field names contain letters, digits, and underscores, beginning with a
-letter or underscore. A numerical action is provided by the online protocol unless
-explicitly present in measurements.
-
-`every_steps` samples logical steps, independently of machine speed. For extendable
-runs, only scheduled multiples are recorded: stopping at step 23 with an interval
-of 10 produces records at 10 and 20. This avoids inserting different observations
-when the same run is extended later. Full trajectories use interval `1`.
-
-Buffering is bounded by an approximate array-byte target, 16 MiB per active run by
-default. Component state and serialization need additional memory. Results flush
-at that target, before checkpoints, and at completion. A result flush alone does
-not save resumable execution state.
-
-A different recording selection retains a separate variant. It may require new
-execution to obtain missing observations. Metrics that need every action or reward
-reject sparse trajectories; the library does not infer omitted data.
-
-## Discord notifications
-
-Notifications are disabled unless a Discord block is configured and enabled:
-
-```yaml
-notifications:
-  discord:
-    enabled: true
-    webhook_env: EWS_DISCORD_WEBHOOK_URL
-    interval_seconds: 300
-    timeout_seconds: 5
-```
-
-These are the defaults when the block is present. Supply the URL using the named
-environment variable or a cloud secret; `webhook_env` contains the variable's name,
-not its value. Only Discord HTTPS webhook endpoints are accepted. A webhook for an
-existing forum thread can include `thread_id` in its URL. A missing or invalid URL
-is a configuration error before execution; setting `enabled: false` requires no
-secret. `plan`, `analyze`, and `plot` do not resolve the variable or send messages.
-
-The coordinator sends a start message, periodic summaries, and attempts a final
-summary for the **run stage** of `run` or `build`. The final message distinguishes
-completed, paused, failed, and aborted execution. It does not claim that a later
-analysis or figure stage in `build` succeeded. Summaries contain the experiment
-name, elapsed time, run counts, and up to four active run identifiers with their
-latest durable checkpoint step. Those counters can lag live execution; an offline
-fit without intermediate checkpoints still receives periodic count updates.
-
-One background sender reads bounded progress metadata for active runs only. No
-worker sends requests, and no protocol step performs notification work. Network
-errors leave scientific execution unaffected. Discord retry windows are respected;
-an unavailable or unauthorized webhook disables delivery for that invocation.
-Updates are best effort, without a durable delivery queue. A final message may be
-omitted during an outage, a rate limit, forced termination, or the bounded shutdown
-wait. The socket timeout is positive and at most 30 seconds; the update interval
-is at least one second. Shutdown waits at most twice the timeout plus 0.25 seconds,
-capped at 60 seconds. Prefer intervals of several minutes.
-
-The resolved configuration stores only the environment variable name. Notification
-settings are excluded from run identities and RNG streams. Payloads contain no
-parameter values, paths, trajectories, exception text, or attachments; mention
-parsing is disabled. Set up the desired Discord channel's incoming webhook and keep
-its URL in your secret store. See the official [webhook API](https://docs.discord.com/developers/resources/webhook#execute-webhook)
-and [rate-limit behavior](https://docs.discord.com/developers/topics/rate-limits).
-
-## Budget continuation and retained artifacts
-
-A component declares `supports_extension = True` only when its saved state can
-continue correctly under a larger execution budget. All three runtime components
-must support this for the run to extend. The built-in online protocol and the
-sequential example do. Offline and indivisible trial operations are not generally
-extendable.
-
-Increasing an extendable run's budget restores its final state and RNGs and executes
-only the additional steps. Decreasing the requested budget selects an appropriate
-recorded prefix; completed budget boundaries remain recorded. A nonextendable
-budget change selects another variant. Scientific, code, dependency, and recording
-changes retain distinct affected variants rather than mixing incompatible results.
-Other matching runs remain reusable.
-
-Extension still respects the scientific input: a finite nonstationary schedule
-cannot provide observations beyond its last row. Changing or appending the schedule
-selects a new instance and run; existing schedule prefixes are not migrated.
-
-The output directory stores an active request and request history. Analysis follows
-the active requested variants and result boundaries. `ews inspect OUTPUT` describes
-available work. Execution requires schema 2 artifacts; supported analysis of older
-schema 1 outputs remains available without silently converting their execution state.
+Execution budget is separate from a scientific horizon parameter. An algorithm
+that uses a fixed horizon in its learning rule must retain that as a scientific
+parameter.
+For older online configurations, `protocol.params.horizon` is normalized into the
+execution budget; conflicting settings are rejected.
 
 ## Instances and scientific components
 
@@ -228,10 +107,9 @@ changing values needed to continue. Supported state includes numerical arrays,
 ordinary scalars, lists, tuples, and string-keyed mappings. The library saves RNG
 states separately. `StateMixin` supplies empty state for stateless components.
 
-Each protocol advance increments `step` exactly once and returns measurements.
-Initialization happens only for a fresh run. Restoration constructs components,
-sets the requested protocol budget, loads component state, and restores RNGs; essential state
-must not depend on repeating initialization.
+Each protocol advance completes one logical step and increments `step` once.
+Initialization runs only for a fresh execution, so restored components must recover
+from their saved state without repeating it.
 
 `online` obtains optional context, asks for an action, and calls the generator.
 `Feedback(value, measurements)` exposes only `value` to the algorithm. Measurements
@@ -291,7 +169,7 @@ data:
   params:
     factory: gymnasium:make
     env_params: {id: CartPole-v1}
-    state_adapter: my_environments:CartPoleState
+    state_adapter: experiment_code.data:CartPoleState
 ```
 
 `CartPoleState` must have a zero-argument constructor and implement the snapshot
@@ -314,7 +192,7 @@ runs:
     protocol:
       type: trial
       params:
-        function: paper:trial
+        function: experiment_code.trials:trial
         params: {size: 100}
     data: {type: 'null'}
     algorithms:
@@ -324,6 +202,82 @@ runs:
 For this example, implement `trial(*, algorithm, data, rng, size)` returning numerical
 output or a mapping. Quote `'null'` in YAML so it remains a component alias. The
 whole function is one step; an interruption inside it restarts that step.
+
+## Execution, logs, and recording
+
+```yaml
+execution:
+  workers: 1
+  checkpoint_seconds: 120.0
+  checkpoint_steps: null
+  keep_checkpoints: 2
+  compression: false
+  logging_level: INFO
+  log_max_bytes: 2097152
+  log_backups: 2
+
+recording:
+  every_steps: 1
+  fields: null
+  buffer_bytes: 16777216
+```
+
+`--workers` overrides the worker setting. One worker executes sequentially in the
+current process. Python scripts launching multiple workers need the usual
+`if __name__ == "__main__":` guard.
+
+Checkpoints use time and step triggers; `null` disables either trigger.
+A pause, graceful interruption, or completion also saves state. Compression trades
+CPU time for disk space. See [checkpoint recovery](ARCHITECTURE.md#checkpoints-completion-and-interruption)
+for commit boundaries and durability.
+
+Run components receive a standard Python logger as `self.logger`. Use parameterized
+messages such as `self.logger.debug("round=%d", self.round)` rather than worker
+prints. Logs rotate at the configured byte threshold and retain the specified
+backups. These operational settings do not change scientific identities or streams.
+
+`fields: null` saves all measurements; a list selects fields. The recorder adds
+`step` automatically and requires consistent numerical dtype and shape for each
+field. Field names contain letters, digits, and underscores, beginning with a
+letter or underscore. A numerical action is provided by the online protocol unless
+explicitly present in measurements.
+
+`every_steps` samples logical steps, independently of machine speed. For extendable
+runs, only scheduled multiples are recorded: stopping at step 23 with an interval
+of 10 produces records at 10 and 20. This avoids inserting different observations
+when the same run is extended later. Full trajectories use interval `1`.
+
+`buffer_bytes` is an approximate per-active-run array limit; component state
+needs additional memory. The default is 16 MiB. Results are flushed before a
+checkpoint and at completion.
+
+A different recording selection retains a separate variant. It may require new
+execution to obtain missing observations. Metrics that need every action or reward
+reject sparse trajectories; the library does not infer omitted data.
+
+## Budget continuation and retained artifacts
+
+A component declares `supports_extension = True` only when its saved state can
+continue correctly under a larger execution budget. All three runtime components
+must support this for the run to extend. The built-in online protocol and the
+sequential example do. Offline and indivisible trial operations are not generally
+extendable.
+
+Increasing an extendable run's budget restores its final state and RNGs and executes
+only the additional steps. Decreasing the requested budget selects an appropriate
+recorded prefix; completed budget boundaries remain recorded. A nonextendable
+budget change selects another variant. Scientific, code, dependency, and recording
+changes retain distinct affected variants rather than mixing incompatible results.
+Other matching runs remain reusable.
+
+Extension still respects the scientific input: a finite nonstationary schedule
+cannot provide observations beyond its last row. Changing or appending the schedule
+selects a new instance and run; existing schedule prefixes are not migrated.
+
+The output directory retains request history, while analysis follows the active
+request's variants and result boundaries. Use `ews inspect OUTPUT` to see selected
+work. [The architecture](ARCHITECTURE.md#budget-and-reusable-work) describes the
+artifact model.
 
 ## Metrics, aggregation, and cache reuse
 
@@ -382,16 +336,12 @@ Standard error is not a confidence interval. Include all varying scientific
 parameters in `group_by`; incompatible configurations, duplicate repetitions, and
 misaligned coordinates are rejected.
 
-`ews analyze` writes current summary tables under `analysis/`. Immutable caches
-live under `analysis/cache/metrics/`, `aggregates/`, and `plots/`; checksums protect
-cached files. Relevant input, code, parameter, and dependency changes invalidate
-the affected artifacts. Replotting from a valid cache avoids metric recomputation.
-Only completed, validated runs contribute, and summaries report their actual count.
-
-Derived output is not always smaller than raw data. Dense CSV summaries, numerical
-summary files, cached curves, and current exported copies can together exceed the
-trajectory's storage size. Preview `ews clean OUTPUT --scope analysis` to reclaim
-these rebuildable artifacts while retaining instances and run observations.
+`ews analyze` writes summary tables under `analysis/` and reuses valid cached
+work. Only completed, validated runs contribute; summaries report their actual
+count. Input, code, parameter, or declared dependency changes invalidate affected
+analysis. See [analysis and cache invalidation](ARCHITECTURE.md#analysis-and-cache-invalidation)
+for cache identities and [cleanup](#build-inspect-and-clean) for removing derived
+artifacts.
 
 ## Figures
 
@@ -438,6 +388,34 @@ configurations, and generated outputs in distinct locations so cleanup scope is
 clear. Execution and cleanup share a lock; analysis and plotting do not, so clean
 artifacts while those operations are idle. See [the architecture](ARCHITECTURE.md)
 for recovery and artifact boundaries.
+
+## Discord notifications
+
+Add an enabled Discord block to receive progress summaries during `run` and the
+execution stage of `build`:
+
+```yaml
+notifications:
+  discord:
+    enabled: true
+    webhook_env: EWS_DISCORD_WEBHOOK_URL
+    interval_seconds: 300
+    timeout_seconds: 5
+```
+
+`webhook_env` names an environment variable containing the HTTPS webhook URL; keep
+the URL out of YAML and source control. An enabled block with a missing or invalid
+URL fails before execution. Omit the block or set `enabled: false` to run without a
+secret. Analysis and plotting do not send messages.
+
+The update interval must be at least one second; the socket timeout must be
+positive and no longer than 30 seconds. Defaults are shown above.
+
+Messages report run counts and recent durable checkpoint progress. Delivery is best
+effort: network errors do not fail simulations, and even the final summary may be
+missed during an outage or forced stop. Notification settings do not change run
+identities or random streams. Messages omit numerical data, parameters, paths, and
+error details; inspect stored artifacts for authoritative status.
 
 ## Standalone authoring and deployment
 

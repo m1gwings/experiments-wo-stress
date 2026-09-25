@@ -1,33 +1,37 @@
 # Development workflow
 
+This is the maintainer workflow for changes to the library. For a researcher's
+first study, start with the [README](../README.md) or an
+[example](../examples/sequential_study/README.md).
+
 ## Start from a concrete study
 
-Use a research need to guide implementation. The current public contracts are in
-[ARCHITECTURE.md](ARCHITECTURE.md) and [CONFIGURATION.md](CONFIGURATION.md).
-Describe scientific inputs, interactions, recorded observations, continuation,
-and analysis before changing those boundaries. Keep speculative features out of
-the operational documentation.
+Identify the scientific inputs, interaction, recorded observations, and intended
+analysis before changing a public contract. The
+[configuration guide](CONFIGURATION.md) describes the authoring interface;
+[architecture](ARCHITECTURE.md) explains identities and persistence. Keep
+paper-specific choices in study code.
 
-Every implementation task includes code polish, affected documentation, and
-examples. After each changed file or tightly related batch, run the quick
-consistency check and inspect affected prose for stale claims:
+Update affected examples and documentation with the code. After each file or
+related edit batch, run:
 
 ```bash
 python scripts/check_docs.py
 ```
 
-This catches broken local links, fences, and repository references. Human review
-and behavior tests establish whether the documented scientific meaning is correct.
+This checks local links, fences, and repository paths. Review the prose against
+the implementation as well; the script cannot judge scientific meaning.
 
-## Verify the relevant boundaries
+## Verify the affected boundary
 
-Install development tools and optional integrations:
+Install development and optional integration dependencies with
+`python -m pip install -e '.[dev,plot,gym]'`. Choose focused tests for the risk:
+deterministic streams and worker changes for execution, interruption and replay
+for checkpoints, variant selection for compatibility changes, and regeneration
+without simulation imports for analysis. Mock notification delivery instead of
+sending real webhooks.
 
-```bash
-python -m pip install -e '.[dev,plot,gym]'
-```
-
-For a substantial change, run:
+For a substantial implementation or release-sized change, run the full checks:
 
 ```bash
 python -m pytest
@@ -37,40 +41,13 @@ ruff format --check src tests examples scripts
 python -m build --no-isolation
 ```
 
-The full documentation check also loads and plans example configurations and probes
-available CLI commands. CI runs these checks with the tests. Focus smaller changes
-on their actual risks; avoid tests that merely repeat implementation details.
+The documentation check also loads and plans example YAML and probes documented
+CLI commands. CI runs the full set. A documentation-only change normally needs
+the documentation check; executable example edits need focused execution tests.
 
-Execution verification compares fresh runs with pause/resume, process interruption,
-changed worker counts, and compatible budget extension. Storage verification covers
-commit boundaries, corrupt artifacts, retained variants, and cleanup scope.
-Notification tests use a mocked transport: no real Discord messages are sent. Verify
-periodic delivery during long runs, bounded shutdown, secret redaction, and unchanged
-scientific identities. The standalone LLM guide has executable copy-and-run examples.
-The separate container CI job builds the deployment template from the current
-Git revision, then checks non-root execution, two-worker pause/resume,
-artifact inspection, TikZ generation, and reuse on a persistent mount. To run it
-locally with Docker and pip-tools installed, use an accessible library commit:
+## Exercise the studies
 
-```bash
-python scripts/check_container.py --revision FULL_40_CHARACTER_GIT_COMMIT
-```
-
-For a private library revision, supply a repository-read token through an
-environment variable and add `--github-token-env EWS_BUILD_GITHUB_TOKEN`; the
-helper forwards it as a temporary BuildKit secret. The public repository's CI
-tests the build without credentials. Never put the token value in command arguments
-or the image.
-
-Python-only checks do not establish that a container image was built successfully.
-
-Analysis verification checks saved-instance access, complete-trajectory requirements,
-cache hits and invalidation, statistical grouping, and figure regeneration without
-simulation imports.
-
-## Exercise the example
-
-Use a fresh output directory for a clean acceptance run:
+For an end-to-end acceptance run, use a fresh output directory:
 
 ```bash
 ews plan examples/sequential_study/experiment.yml
@@ -82,32 +59,29 @@ ews run examples/offline_csv/experiment.yml --output outputs/offline-verificatio
 ews analyze examples/offline_csv/experiment.yml --output outputs/offline-verification
 ```
 
-The first execution pauses after 250 new steps per run. The first build continues
-with two workers and produces configured analysis. The repeated build should reuse
-valid completed work and analysis caches. Inspect logs and generated figures;
-formats should contain the same curves, labels, and uncertainty meaning.
+The paused run should resume with two workers; the second build should reuse
+completed runs and analysis. Inspect logs and figures when those outputs are
+affected. To test extension, increase `budget.steps` in a temporary
+configuration beside its `experiment_code/` package and compare the extended
+result with a fresh run at the larger budget. Do not commit temporary output.
 
-To exercise extension, increase `budget.steps` in a temporary copy of the sequential
-configuration kept beside its scientific module, then run against the same output.
-Compare its complete numerical trajectory with a fresh run at that larger budget.
-Do not keep the temporary configuration or generated outputs in the commit.
-
-To inspect cleanup without deleting anything:
+The separate container check builds the deployment template, then exercises
+non-root execution, a persistent mount, pause/resume, inspection, TikZ export,
+and reuse. With Docker and pip-tools available, run it against an accessible
+full Git revision:
 
 ```bash
-ews clean outputs/verification --scope inactive
+python scripts/check_container.py --revision FULL_40_CHARACTER_GIT_COMMIT
 ```
 
-Apply cleanup only when the displayed selection is intended. Removing checkpoints
-preserves observations but removes continuation state. TikZ compilation is an
-optional local check; source export does not require a TeX installation.
+If that revision is private, pass a repository-read token through
+`--github-token-env EWS_BUILD_GITHUB_TOKEN`; the helper uses a temporary
+BuildKit secret. Python-only checks do not establish that the container builds
+successfully.
 
 ## Review and deliver
 
-Review the final source and documentation together. Record tests and material
-limits, such as incomplete observations, an indivisible offline step, or an
-external environment that cannot snapshot all state. Preserve the distinction
-between implemented behavior and future work.
-
-The next product milestone is adoption in a genuine paper project. Stable release,
-license choice, and publication remain separate owner decisions.
+Review source, documentation, examples, and actual test results together. Record
+material limits, especially incomplete recording, indivisible steps, and
+external state that cannot be restored. Keep a clear distinction between
+implemented behavior and future work.

@@ -1,52 +1,24 @@
 # Running a study on a small cloud VM
 
-The current library fits **one Linux VM running Docker, with a persistent block
-disk for experiment artifacts**. Start with 2–4 vCPUs and 4–8 GB RAM, then size the
-machine from a representative run. This is a deployment recommendation, not a new
-execution backend: the CLI still launches local workers and writes ordinary files.
+An existing study can run on one Linux VM using the same `ews` commands as on a
+laptop. This guide uses a container for the software environment and a
+persistent block disk for experiment output. The library still runs local
+workers and writes ordinary files; it does not need a distributed service.
 
-Nothing in this guide provisions infrastructure or starts a paid resource.
+Start with a small VM, then size it from a representative run. Choose storage
+that survives VM replacement and back it up
+separately. Provider prices and shared-CPU performance change, so check the
+chosen region and plan before committing to a long run.
 
-## Provider choices
+## Prepare the study
 
-Pricing checked against official pages on **24 September 2026**. Compare the actual
-region and available plan before ordering; storage, public IPs, taxes, and retained
-resources can add to the compute price.
-
-| Option | Published reference price | Fit for this project |
-| --- | --- | --- |
-| Hetzner shared x86 VM in Germany/Finland | June 2026 schedule: CPX22 €19.49/month, excluding VAT and IPv4 | A practical EU starting point. Benchmark sustained throughput on the chosen shared plan. |
-| Hetzner lower-cost CX plan, if available | The same schedule lists CX23 at €5.49/month, excluding VAT and IPv4 | Worth checking in the console; a published tariff does not establish current order availability. |
-| AWS Lightsail Linux with IPv4 | 2 vCPUs, 4 GB RAM, 80 GB SSD: $24/month | Simple bundled pricing for an existing AWS workflow, with an important sustained-CPU limit. |
-
-The Hetzner numbers come from its [official price adjustment schedule](https://docs.hetzner.com/general/infrastructure-and-availability/price-adjustment/);
-check [current Cloud offerings](https://www.hetzner.com/cloud/) for availability.
-Lightsail's bundle is listed on [AWS pricing](https://aws.amazon.com/lightsail/pricing/).
-
-I would first compare the smallest available Hetzner shared x86 plan with at least
-4 GB RAM. Its shared CPU resources can vary with neighboring workloads; choose
-dedicated resources if measured throughput warrants the higher price.
-[Hetzner explains shared versus dedicated resources](https://docs.hetzner.com/cloud/servers/faq/).
-
-For long CPU-saturating runs, do not treat Lightsail's two vCPUs as two continuously
-available full cores: its $24 general-purpose plan has a 20% baseline per vCPU and
-uses burst capacity above that level. Short tests may overstate sustained throughput.
-[AWS baseline and burst-capacity documentation](https://docs.aws.amazon.com/lightsail/latest/userguide/baseline-cpu-performance.html)
-
-Attach a block-storage volume when results must survive VM replacement. Hetzner
-Volumes attach to one server at a time and are billed separately. Its server backups
-do **not** include attached Volumes, so make a separate artifact backup.
-[Hetzner Volume documentation](https://docs.hetzner.com/cloud/volumes/overview/)
-
-## Keep the paper in its own repository
-
-The library is a dependency. Your study repository contains its configuration,
-scientific extensions, small inputs, and pinned environment:
+Keep the paper repository separate from the library. A container build needs the
+study, its pinned dependencies, and the deployment template:
 
 ```text
 my-paper/
   experiment.yml
-  paper/
+  experiment_code/
     __init__.py
     algorithms.py
     data.py
@@ -59,26 +31,16 @@ my-paper/
   .dockerignore
 ```
 
-Use component paths such as `paper.algorithms:MyAlgorithm`. With `experiment.yml`
-at the repository root, the loader makes that root available for imports. The
-container uses `/workspace` consistently; the output directory is `/output/study`.
-Keep metric-only code in its own module so changes do not alter simulation module
-fingerprints. See [the configuration guide](CONFIGURATION.md) for the interfaces.
+Use only the `experiment_code/` modules your study needs. With `experiment.yml`
+at the repository root, paths such as `experiment_code.algorithms:MyAlgorithm`
+import from that package. The [configuration guide](CONFIGURATION.md) covers
+component interfaces.
 
-Put the **full 40-character library Git commit** you intend to use in `.ews-revision`.
-Choose a commit that contains the features your configuration requests. The container
-recipe deliberately requires this value; it does not install a floating `main` branch.
-Pip supports commit-pinned Git installations and recommends full hashes.
-[Pip VCS documentation](https://pip.pypa.io/en/stable/topics/vcs-support/)
-
-Your `requirements.in` should list the study's runtime packages, including NumPy
-and PyYAML, plus `setuptools>=68` and `wheel` for building the pinned library wheel.
-Add Matplotlib for PDF/JPG figures, Gymnasium for Gym adapters, and the dependencies
-of your own components. The library itself is installed separately from its Git pin.
-
-Generate `requirements.lock` with exact versions and hashes in the intended Python
-version/platform, review it, and commit it. For example, in a matching development
-environment:
+Put the full library Git commit hash in `.ews-revision`. List the study's
+runtime packages in `requirements.in`, including NumPy and PyYAML, plus
+`setuptools>=68` and `wheel` for the library wheel build. Add optional plotting,
+Gymnasium, or scientific dependencies your study uses. Generate and commit a
+version-and-hash lock for the Python version and platform you intend to deploy:
 
 ```bash
 python -m pip install pip-tools
@@ -86,20 +48,16 @@ python -m piptools compile --generate-hashes --allow-unsafe \
   --output-file requirements.lock requirements.in
 ```
 
-`--allow-unsafe` keeps requested build packages such as setuptools in the lock.
-The Dockerfile installs it with `--require-hashes`, so transitive dependencies must
-also be listed and hashed. [Pip-tools usage](https://pip-tools.readthedocs.io/en/stable/),
-[pip hash checking](https://pip.pypa.io/en/stable/topics/secure-installs/).
+The template installs the lock with `--require-hashes`, so it must include
+transitive packages and their hashes. Copy
+[Dockerfile.example](../deploy/Dockerfile.example) to `Dockerfile` and
+[.dockerignore.example](../deploy/.dockerignore.example) to `.dockerignore` in
+the paper repository.
 
-## Build the container
+## Build the image
 
-Copy [Dockerfile.example](../deploy/Dockerfile.example) to `Dockerfile` and
-[.dockerignore.example](../deploy/.dockerignore.example) to `.dockerignore` in the
-paper repository. The build context is the **paper repository**, not this library's
-checkout. The Dockerfile builds the library wheel from the pinned commit and copies
-the study code into the final image.
-
-The library repository is public, so this build needs no GitHub credentials:
+Build from the **paper repository**, using its full Git revision and the pinned
+library revision:
 
 ```bash
 docker build \
@@ -108,36 +66,22 @@ docker build \
   --tag paper-study:locked .
 ```
 
-For repeatable deployments, also pass `--build-arg PYTHON_IMAGE=...` with a pinned
-Python image digest, and keep the same CPU architecture. Retain the built image or
-its registry digest together with the lock and study commit. The default tag in the
-example is convenient for a first build; a tag alone does not freeze the base image.
-The final image does not need a copy of the library's Git repository.
+For repeatable rebuilds, pin the Python base image by digest as `PYTHON_IMAGE`
+and retain the image or its registry digest with the lock and study commit. The
+template fetches the public library during the build; the running container
+needs no Git credentials. If a dependency is private, use a Docker build secret
+or SSH mount rather than putting a token in a URL or build argument. The
+optional `github_token` secret is supported by the template.
 
-The example fetches the public library over HTTPS and copies an already checked-out
-paper repository into the image. The runtime container needs no GitHub credentials.
-If the library or another Git dependency becomes private, pass a read-only token
-through `--secret id=github_token,env=EWS_GITHUB_TOKEN` after setting that
-environment variable. The Dockerfile's temporary Git askpass script reads the
-mounted secret; neither it nor the token enters the resulting image. Use build
-secrets or SSH mounts for other private dependencies rather than embedding tokens
-in URLs, `ARG`, or `ENV`.
-[Docker build secrets](https://docs.docker.com/build/building/secrets/)
-
-The repository's container CI job builds this template against a temporary
-standalone study and checks non-root execution, a durable output mount,
-two-worker pause/resume, inspection, figures, and reuse. Its helper is
-[`scripts/check_container.py`](../scripts/check_container.py).
-
-The recipe has an exec-form `ENTRYPOINT`, so the `ews` process receives stop signals.
-It defaults to `--help`, exposing no network service.
-[Dockerfile reference](https://docs.docker.com/reference/dockerfile/)
+The repository's [container check](../scripts/check_container.py) builds this
+template and exercises pause, resume, inspection, figure export, and reuse with
+a temporary standalone study.
 
 ## Run with durable output
 
-On the VM, mount the persistent block disk using a normal Linux filesystem such as
-ext4. Create an output directory on that disk and give the account running Docker
-write access. The example assumes `/srv/ews-output` is that existing directory:
+Mount a persistent block disk with a normal Linux filesystem and give the Docker
+user write access. The following example assumes that `/srv/ews-output` is on
+that disk:
 
 ```bash
 docker run --detach --name paper-study \
@@ -151,26 +95,23 @@ docker run --detach --name paper-study \
 docker logs --follow paper-study
 ```
 
-Docker bind mounts preserve files on the host independently of container removal.
-They do not turn an ephemeral VM disk into persistent storage: the host path must
-be on the disk you intend to retain.
-[Docker bind-mount documentation](https://docs.docker.com/engine/storage/bind-mounts/)
+The bind mount keeps output outside the container; the host path must itself be
+on persistent storage. Only one executor should write a given output directory.
+Use separate directories for separate studies.
 
-For a deliberate stop and resume:
+To stop and resume with the same image and mount:
 
 ```bash
 docker stop --timeout 120 paper-study
 docker start --attach paper-study
 ```
 
-The same image, configuration, and output mount let the runner select compatible
-checkpoints. Docker sends SIGTERM and later SIGKILL if the grace period expires;
-the library handles SIGTERM at the next protocol boundary. Set the grace period
-longer than a normal step plus a checkpoint write. An indivisible long `fit()` may
-still restart from its preceding checkpoint.
-[Docker stop semantics](https://docs.docker.com/reference/cli/docker/container/stop/)
+The stop grace period should allow a normal protocol step and checkpoint write.
+A long offline `fit()` or callable trial is one step and may restart from its
+previous checkpoint if stopped during that call. See the
+[checkpoint model](ARCHITECTURE.md#checkpoints-completion-and-interruption).
 
-After execution, inspect or plot using the same image and mount:
+Inspect results or generate figures using the same image and output mount:
 
 ```bash
 docker run --rm \
@@ -184,75 +125,32 @@ docker run --rm \
   paper-study:locked plot /workspace/experiment.yml --output /output/study
 ```
 
-Only one executor may write an output root. Run separate experiments in separate
-directories. Use object storage for backups of a stopped/consistent output tree,
-including `metadata.json`, `requests/`, `instances/`, and `runs/`. The live storage
-contract depends on filesystem locking, atomic rename, and fsync; object-storage
-URLs, object-store FUSE mounts, and multiple machines sharing one output directory
-are outside its tested guarantees.
+Back up the complete output tree after stopping execution or at another
+consistent point. Object storage is suitable for backups, but the live output
+directory needs filesystem locking and atomic file replacement.
 
 ## Resources and compatibility
 
-Start with one worker, measure it, then increase up to the VM's useful CPU capacity.
-The recipe sets BLAS/OpenMP thread counts to one so each worker does not also spawn
-a full numerical thread pool. If one run is dominated by large matrix operations,
-measure fewer workers with more numerical threads instead.
+Start with one worker and increase it after measuring CPU and memory use. The
+template limits BLAS/OpenMP threads to one per worker; a run dominated by large
+matrix operations may work better with fewer workers and more numerical threads.
+Allow room for each worker's result buffer (16 MiB by default), component state,
+checkpoints, retained run variants, and analysis artifacts.
 
-Budget memory for each worker's 16 MiB default result buffer **plus** algorithm,
-environment, input, and checkpoint state. Analysis loads one run and grouped metric
-summaries, so long trajectories and many groups can exceed the simulation's memory.
-Disk planning must include instances, retained variants/checkpoints, metric caches,
-tables, and figures. Worker count is not a bound on total analysis memory.
+**Use the same VM and software environment when you need exact checkpoint
+continuation.** Compatibility checks include Python and numerical-library
+versions, platform identity, source code, and tracked input paths. Even the same
+container image on another host may select a new run variant, especially if the
+kernel or resolved paths differ. Keep `/workspace` and `/output` stable and
+validate any migration before relying on reuse. Saved results can still be
+copied for separate analysis.
 
-**A Docker image does not guarantee portable checkpoint reuse between machines.**
-The current simulation compatibility fingerprint includes Python/NumPy versions
-and `platform.platform()`, including the host kernel reported inside a container.
-Resolved input/dependency paths also participate in identities. Moving from a laptop
-to a cloud VM, changing kernels, or changing absolute input paths can create a new
-simulation variant even when the image and scientific parameters match.
+## Optional progress messages
 
-Keep `/workspace` and `/output` stable, preserve the full artifacts, and expect exact
-continuation only when the recorded compatibility inputs match. Saved results remain
-available for independent analysis on another machine; there is no supported switch
-to ignore the execution compatibility checks. The practical first route is to run
-and resume a study on the same VM/image, and use local copies for analysis.
-
-## Optional Discord progress notifications
-
-With a library revision that includes notifications, configure:
-
-```yaml
-notifications:
-  discord:
-    enabled: true
-    webhook_env: EWS_DISCORD_WEBHOOK_URL
-    interval_seconds: 300
-    timeout_seconds: 5
-```
-
-Set `EWS_DISCORD_WEBHOOK_URL` in the VM session or secret manager, then add
-`--env EWS_DISCORD_WEBHOOK_URL` to `docker run`. Docker copies the existing variable;
-the URL need not appear in the command, YAML, Git history, or image build arguments.
-The Docker ignore example excludes `.env` files. These messages are optional and
-do not replace the saved logs, progress records, or checkpoint state.
-
-Notifications describe the run stage (`run`, or the simulation stage of `build`),
-not analysis or plotting. Enabling them without the configured environment variable
-is a configuration error before execution; delivery failures during a run produce
-warnings without failing the simulation. Omit the block or set `enabled: false` to
-run without notification credentials.
-
-## When a managed scheduler becomes useful
-
-AWS Batch on EC2 Spot becomes worth evaluating when there are enough independent
-jobs to justify queueing and worker provisioning. Batch itself has no additional
-service charge; underlying compute and related services are billed.
-[AWS Batch pricing](https://aws.amazon.com/batch/pricing/)
-
-Spot interruption notices normally give two minutes to respond. This library has
-checkpoint boundaries, but it does not implement an EC2 interruption listener,
-cross-machine artifact transfer, or a distributed scheduler. A Batch/Spot setup
-needs explicit durable-storage and restore handling, separate output roots, and a
-tested compatibility policy before relying on retries. Managed containers alone
-do not solve those requirements. For the current scale, a single VM is less work.
-[AWS Spot interruption guidance](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/spot-best-practices.html)
+Discord summaries can report progress during `run` and the execution stage of
+`build`. Configure them as described in
+[Discord notifications](CONFIGURATION.md#discord-notifications), set
+`EWS_DISCORD_WEBHOOK_URL` in the VM environment, and add
+`--env EWS_DISCORD_WEBHOOK_URL` to `docker run`. Keep the webhook out of YAML,
+image arguments, and Git. Saved logs and artifacts remain the source of truth
+for execution state.

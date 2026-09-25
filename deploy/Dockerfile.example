@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 # Copy this file to Dockerfile in the paper's standalone repository.
-# Build context: that repository, containing experiment.yml, paper/, and requirements.lock.
+# Build context: that repository, containing experiment.yml, experiment_code/, and requirements.lock.
 # Pin PYTHON_IMAGE to a digest for a repeatable deployment; keep the same architecture.
 ARG PYTHON_IMAGE=python:3.12-slim-bookworm
 
