@@ -14,7 +14,11 @@ from ..components.loading import resolve_type, validate_component
 
 
 class NullAlgorithm(StateMixin):
-    """Placeholder for trial functions that do not need an algorithm object."""
+    """Supply an RNG and an empty checkpoint for a self-contained trial function.
+
+    This placeholder has no policy or fitting methods; the trial function owns
+    the computation and can use the injected RNG when it needs randomness.
+    """
 
     supports_extension = True
 
@@ -23,6 +27,13 @@ class NullAlgorithm(StateMixin):
 
 
 class _SteppedProtocol:
+    """Share completed-step bookkeeping across the supplied interaction loops.
+
+    Subclasses define how a step runs and when execution ends. This base saves
+    only progress; protocols with additional state, such as RL observations and
+    episode boundaries, extend the checkpoint mapping themselves.
+    """
+
     def __init__(self, *, rng: np.random.Generator) -> None:
         self.rng = rng
         self.step = 0
@@ -46,7 +57,13 @@ class _SteppedProtocol:
 
 
 class OnlineProtocol(_SteppedProtocol):
-    """Act, generate feedback, and observe it for a fixed number of rounds."""
+    """Complete one action/feedback/update cycle per step until the requested budget.
+
+    Each round obtains optional context from the data generator, asks the learner
+    for an action, generates feedback, and updates the learner with its observable
+    value. Evaluation measurements are returned to the recorder. Only ``step``
+    is checkpointed here; algorithm and environment state have their own owners.
+    """
 
     supports_extension = True
 
@@ -63,15 +80,18 @@ class OnlineProtocol(_SteppedProtocol):
         self.horizon = steps
 
     def initialize(self, algorithm: Any, data: Any) -> None:
+        """Check the budget and component methods before starting interaction."""
         if self.horizon < 1:
             raise ValueError("Call set_budget(steps) before initializing an online protocol")
         validate_component(algorithm, ("act", "observe", "state_dict", "load_state_dict"))
         validate_component(data, ("generate", "state_dict", "load_state_dict"))
 
     def is_finished(self) -> bool:
+        """Report whether the completed-step counter has reached the requested budget."""
         return self.step >= self.horizon
 
     def advance(self, algorithm: Any, data: Any) -> dict[str, Any]:
+        """Complete one learner update and return its numerical observations."""
         if self.is_finished():
             raise RuntimeError("Cannot advance a completed online protocol")
         context_method = getattr(data, "context", None)
@@ -84,6 +104,7 @@ class OnlineProtocol(_SteppedProtocol):
             )
         if not isinstance(feedback.measurements, Mapping):
             raise TypeError("Feedback.measurements must be a mapping of numerical observations")
+        # Evaluation-only measurements stay outside the learner's information.
         algorithm.observe(action, feedback.value)
         observations = dict(feedback.measurements)
         try:
@@ -123,6 +144,11 @@ class RLProtocol(OnlineProtocol):
     A transition is a mapping with observation, next_observation, reward,
     terminated, truncated, and info. Termination and truncation are kept separate
     so learners can make the appropriate bootstrapping decision.
+
+    This protocol owns the current observation, episode index, and pending reset.
+    The environment owns its internal dynamics. A terminal transition is fully
+    recorded before the next call resets the environment, so checkpoints preserve
+    either side of an episode boundary without repeating a transition.
     """
 
     supports_extension = True
@@ -134,6 +160,7 @@ class RLProtocol(OnlineProtocol):
         self.needs_reset = True
 
     def initialize(self, algorithm: Any, data: Any) -> None:
+        """Validate the components and obtain the first episode's observation."""
         super().initialize(algorithm, data)
         validate_component(data, ("reset",))
         self.observation, _ = data.reset()
@@ -141,6 +168,7 @@ class RLProtocol(OnlineProtocol):
         self.needs_reset = False
 
     def advance(self, algorithm: Any, data: Any) -> dict[str, Any]:
+        """Reset if necessary, complete one transition, and update the learner."""
         if self.is_finished():
             raise RuntimeError("Cannot advance a completed RL protocol")
         if self.needs_reset:
@@ -148,6 +176,8 @@ class RLProtocol(OnlineProtocol):
             self.observation = copy.deepcopy(self.observation)
             self.episode += 1
             self.needs_reset = False
+        # The learner and environment may mutate their inputs; preserve the
+        # transition's observations independently of those component objects.
         observation = copy.deepcopy(self.observation)
         action = algorithm.act(context=copy.deepcopy(observation))
         feedback = data.generate(action)
@@ -184,6 +214,7 @@ class RLProtocol(OnlineProtocol):
         return observations
 
     def state_dict(self) -> dict[str, Any]:
+        """Snapshot progress and the observation/reset state at a transition boundary."""
         return {
             "step": self.step,
             "observation": copy.deepcopy(self.observation),
@@ -192,6 +223,7 @@ class RLProtocol(OnlineProtocol):
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        """Restore protocol progress without resetting the restored environment."""
         if set(state) != {"step", "observation", "episode", "needs_reset"}:
             raise ValueError("Invalid RL protocol checkpoint fields")
         super().load_state_dict({"step": state["step"]})
@@ -220,13 +252,19 @@ def _observations(value: Any) -> dict[str, Any]:
 
 
 class OfflineProtocol(_SteppedProtocol):
-    """Generate a dataset and fit an algorithm in one atomic step."""
+    """Generate a dataset and fit an algorithm as one indivisible protocol step.
+
+    ``request`` is passed to the data generator and the resulting dataset to
+    ``algorithm.fit``. The fit's numerical output becomes the observations.
+    Checkpointing can preserve the finished fit, but cannot resume inside it.
+    """
 
     def __init__(self, *, rng: np.random.Generator, request: Any = None) -> None:
         super().__init__(rng=rng)
         self.request = request
 
     def initialize(self, algorithm: Any, data: Any) -> None:
+        """Check fitting, generation, and checkpoint methods before the trial starts."""
         validate_component(algorithm, ("fit", "state_dict", "load_state_dict"))
         validate_component(data, ("generate", "state_dict", "load_state_dict"))
 
@@ -234,6 +272,7 @@ class OfflineProtocol(_SteppedProtocol):
         return self.step >= 1
 
     def advance(self, algorithm: Any, data: Any) -> dict[str, Any]:
+        """Generate the dataset, finish fitting, and expose the fit's observations."""
         if self.is_finished():
             raise RuntimeError("Cannot advance a completed offline protocol")
         result = _observations(algorithm.fit(data.generate(self.request)))
@@ -264,6 +303,7 @@ class TrialProtocol(_SteppedProtocol):
             raise ValueError(f"Trial parameters use reserved names: {', '.join(sorted(reserved))}")
 
     def initialize(self, algorithm: Any, data: Any) -> None:
+        """Check that both objects passed to the trial can participate in a checkpoint."""
         for component in (algorithm, data):
             validate_component(component, ("state_dict", "load_state_dict"))
 
@@ -271,6 +311,7 @@ class TrialProtocol(_SteppedProtocol):
         return self.step >= 1
 
     def advance(self, algorithm: Any, data: Any) -> dict[str, Any]:
+        """Execute the configured function once and normalize its numerical output."""
         if self.is_finished():
             raise RuntimeError("Cannot advance a completed trial protocol")
         result = _observations(

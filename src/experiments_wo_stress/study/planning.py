@@ -36,9 +36,16 @@ class RunPlanner(Protocol):
 
 
 class GridPlanner:
-    """Cross grid coordinates with algorithms and independent repetitions."""
+    """Expand one group into a Cartesian grid of independent run descriptions.
+
+    For each grid point, copy the component settings, apply the selected values,
+    and yield every algorithm/repetition combination through ``make_run_spec``.
+    Sorting axis names makes traversal predictable; run identities and RNG streams
+    depend on scientific inputs rather than their positions in that traversal.
+    """
 
     def plan(self, group: Mapping[str, Any], seed: int) -> Iterable[RunSpec]:
+        """Yield one validated description per grid point, algorithm, and repetition."""
         axes = sorted(group.get("grid", {}))
         values = [group["grid"][axis] for axis in axes]
         for point in itertools.product(*values):

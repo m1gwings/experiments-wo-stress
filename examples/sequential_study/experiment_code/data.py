@@ -20,7 +20,9 @@ class GaussianBandit:
 
     The generated arm means are saved once as an immutable instance. Each run
     records actions and rewards; a separate metric computes pseudo-regret using
-    those observations and the saved means.
+    those observations and the saved means. ``context`` reveals only the number
+    of arms. ``generate`` samples the chosen arm's reward and advances the round
+    counter, which is the component state saved in a checkpoint.
     """
 
     supports_extension = True
@@ -82,7 +84,9 @@ class ClippedFeedbackBandit(GaussianBandit):
     """An example feedback rule: clip the observation delivered to the algorithm.
 
     Underlying Gaussian rewards and arm means retain their original meaning.
-    This changes the learning problem and is deliberately opt-in.
+    ``generate`` first obtains the parent's reward, then clips the feedback and
+    saves the original value as ``raw_reward`` for later evaluation. This changes
+    the learning problem and is deliberately opt-in.
     """
 
     def generate(self, action: int) -> Feedback:

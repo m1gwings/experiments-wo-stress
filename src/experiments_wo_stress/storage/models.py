@@ -58,6 +58,10 @@ class Instance:
     Metadata contains plain structured values. Arrays hold numerical scientific
     inputs such as arm means or a time-dependent reward schedule. Constructors
     copy array inputs once; later consumers can safely share the frozen arrays.
+
+    A data generator creates the instance before interaction. Storage identifies
+    it by its contents, and analysis reloads it without importing the generator.
+    Evolving cursors, learner state, and protocol progress belong in checkpoints.
     """
 
     metadata: Mapping[str, Any] = field(default_factory=dict)
@@ -110,6 +114,10 @@ class RunResult(Mapping[str, np.ndarray]):
     Mapping access remains compatible with metrics written for a dictionary of
     arrays. Scientific metrics can also inspect ``instance`` and ``final_outputs``.
     Record arrays are exposed as read-only views without duplicating loaded data.
+
+    ``completed_steps`` describes the requested completed prefix, which may have
+    fewer recorded rows under sparse recording. ``revision`` identifies the saved
+    records and instance for analysis cache reuse; it is not a simulation seed.
     """
 
     records: Mapping[str, np.ndarray]

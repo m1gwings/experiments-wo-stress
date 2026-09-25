@@ -59,6 +59,8 @@ def _webhook_url(value: str) -> str:
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    """Keep webhook credentials on the validated endpoint by refusing redirects."""
+
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
 
@@ -77,6 +79,10 @@ class ExperimentNotifier:
     Only the coordinator owns this object. Run callbacks copy small bookkeeping
     values; no worker or protocol step performs notification IO. HTTP failures never
     fail a simulation. Explicit configuration errors are rejected before execution.
+
+    ``start`` launches one sender; run callbacks update counters and active paths;
+    ``finish`` requests a final summary with a bounded wait. The sender reads only
+    durable progress for status and keeps the webhook secret in memory.
     """
 
     def __init__(self, settings: Mapping[str, Any], name: str, total: int):
@@ -123,11 +129,13 @@ class ExperimentNotifier:
             self._warn("background sender could not start; delivery disabled")
 
     def run_started(self, run_id: str, directory: Path, budget: int | None) -> None:
+        """Register a run for later status summaries without sending a request."""
         if self.enabled:
             with self._lock:
                 self._active[run_id] = (directory, budget)
 
     def run_finished(self, result: tuple[str, str, str | None]) -> None:
+        """Replace an active run with its outcome count, discarding any error text."""
         if self.enabled:
             run_id, status, _ = result
             with self._lock:

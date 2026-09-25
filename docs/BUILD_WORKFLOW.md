@@ -4,6 +4,9 @@ This is the maintainer workflow for changes to the library. For a researcher's
 first study, start with the [README](../README.md) or an
 [example](../examples/sequential_study/README.md).
 
+For a source tour and a map from components to focused tests, see
+[Reading the code](CODE_GUIDE.md).
+
 ## Start from a concrete study
 
 Identify the scientific inputs, interaction, recorded observations, and intended

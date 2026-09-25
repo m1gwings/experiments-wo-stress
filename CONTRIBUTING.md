@@ -6,6 +6,10 @@ and independent analysis. Read the [project brief](docs/PROJECT_BRIEF.md) for
 scope and the [architecture](docs/ARCHITECTURE.md) before changing storage or
 execution boundaries.
 
+For a guided first pass through the source and tests, use
+[Reading the code](docs/CODE_GUIDE.md). It follows one study from configuration
+through execution and saved-result analysis.
+
 ## Set up a checkout
 
 Use Python 3.10 or newer:
@@ -27,6 +31,12 @@ the paper repository; add library settings only when their reuse across studies
 is clear. Write focused code with useful errors and public docstrings. Update
 affected documentation and examples in the same change, then test the behavior
 at the boundary it touches.
+
+Group tests by the behavior they explain. Give each test module and class a
+clear scope, name scenarios by their expected outcome, and keep setup close to
+the assertions. Use small documented fixtures and comments to explain unusual
+failure injection or recovery steps. Class docstrings should describe what the
+class owns, how it is used, and any ordering or state constraints a reader needs.
 
 Run `python scripts/check_docs.py` after a documentation edit or related batch.
 It checks links, fences, and repository paths. The

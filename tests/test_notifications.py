@@ -1,4 +1,10 @@
-"""Optional Discord notifications, with every HTTP operation replaced locally."""
+"""Test optional Discord delivery with an in-memory replacement for every HTTP call.
+
+Read configuration and credential validation first, then request transport,
+progress summaries, and background-thread lifecycle. Integration with actual
+experiment execution is covered by ``NotificationExecutionTests`` in
+``test_lifecycle.py``.
+"""
 
 from __future__ import annotations
 
@@ -28,7 +34,9 @@ _ENV = "EWS_TEST_DISCORD_WEBHOOK"
 _URL = "https://discord.com/api/webhooks/123456789012345678/fictional_test_secret"
 
 
-class _Response:
+class _HTTPResponse:
+    """Expose response headers using the context-manager shape expected by urllib."""
+
     def __init__(self, headers=None):
         self.headers = headers or {}
 
@@ -39,7 +47,9 @@ class _Response:
         return False
 
 
-class _TrackedBody(io.BytesIO):
+class _TrackedResponseBody(io.BytesIO):
+    """Record requested read sizes so tests can enforce bounded error-body reads."""
+
     def __init__(self, body):
         super().__init__(body)
         self.read_sizes = []
@@ -49,7 +59,13 @@ class _TrackedBody(io.BytesIO):
         return super().read(size)
 
 
-class _Opener:
+class _RecordingOpener:
+    """Capture HTTP requests and optionally inject a response failure or blocking send.
+
+    Both the test thread and notifier thread inspect calls, so capture and
+    snapshots use a lock. No request reaches the network.
+    """
+
     def __init__(self):
         self.calls = []
         self.effect = None
@@ -61,16 +77,19 @@ class _Opener:
             self.calls.append((request, timeout, threading.current_thread().name))
         if self.effect is not None:
             self.effect(request)
-        return _Response(self.headers)
+        return _HTTPResponse(self.headers)
 
     def contents(self):
+        """Take a thread-safe snapshot of the captured Discord message contents."""
         with self.lock:
             return [json.loads(request.data)["content"] for request, _, _ in self.calls]
 
 
-class _NotificationTest(unittest.TestCase):
+class _MockTransportTestCase(unittest.TestCase):
+    """Install a fictional credential and recording transport for each scenario."""
+
     def setUp(self):
-        self.opener = _Opener()
+        self.opener = _RecordingOpener()
         patcher = mock.patch(
             "experiments_wo_stress.execution.notifications.urllib.request.build_opener",
             return_value=self.opener,
@@ -81,12 +100,15 @@ class _NotificationTest(unittest.TestCase):
         environment.start()
         self.addCleanup(environment.stop)
 
-    def notifier(self, **options):
+    def make_notifier(self, **options):
+        """Create an enabled three-run notifier with scenario-specific delivery options."""
         settings = {"discord": {"webhook_env": _ENV, "interval_seconds": 1, **options}}
         return ExperimentNotifier(settings, "example @everyone", 3)
 
 
-class NotificationConfigurationTests(_NotificationTest):
+class NotificationConfigurationTests(_MockTransportTestCase):
+    """Optional delivery settings validate strictly and leave scientific identity unchanged."""
+
     def test_absent_or_explicitly_disabled_notifications_do_no_network_work(self):
         for settings in ({}, {"discord": {"enabled": False, "webhook_env": "UNSET_EWS_TEST"}}):
             notifier = ExperimentNotifier(settings, "study", 1)
@@ -98,20 +120,8 @@ class NotificationConfigurationTests(_NotificationTest):
         self.build_opener.assert_not_called()
         self.assertEqual(self.opener.calls, [])
 
-    def test_background_thread_start_failure_does_not_abort_execution(self):
-        notifier = self.notifier()
-        with mock.patch.object(threading.Thread, "start", side_effect=RuntimeError(_URL)):
-            with self.assertLogs(
-                "experiments_wo_stress.execution.notifications", level="WARNING"
-            ) as captured:
-                notifier.start()
-        notifier.finish({"completed": 3})
-        self.assertFalse(notifier.enabled)
-        self.assertIsNone(notifier._thread)
-        self.assertEqual(self.opener.calls, [])
-        self.assertNotIn(_URL, " ".join(captured.output))
-
     def test_strict_configuration_validation(self):
+        """Reject unsupported keys, wrong types, and invalid timing limits; verify defaults."""
         invalid = [
             None,
             [],
@@ -137,6 +147,37 @@ class NotificationConfigurationTests(_NotificationTest):
         self.assertEqual(defaults["timeout_seconds"], 5)
         self.assertTrue(defaults["enabled"])
 
+    def test_configuration_serializes_only_environment_name_and_preserves_science(self):
+        """Persist the credential's environment name without changing simulation settings."""
+        # Loading settings validates component references without importing paper code.
+        document = {
+            "name": "study",
+            "runs": [
+                {
+                    "name": "main",
+                    "protocol": {"type": "online", "params": {"horizon": 3}},
+                    "data": {"type": "gaussian_bandit", "params": {"means": [0.2, 0.8]}},
+                    "algorithms": [{"name": "learner", "type": "paper_code:UnusedLearner"}],
+                }
+            ],
+        }
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "study.yml"
+            path.write_text(yaml.safe_dump(document), encoding="utf-8")
+            original = load_config(path)
+            document["notifications"] = {"discord": {"webhook_env": _ENV}}
+            path.write_text(yaml.safe_dump(document), encoding="utf-8")
+            configured = load_config(path)
+            persisted = yaml.safe_dump(configured.to_dict())
+        self.assertIn(_ENV, persisted)
+        self.assertNotIn(_URL, persisted)
+        self.assertNotIn("fictional_test_secret", persisted)
+        self.assertEqual(original.simulation_dict(), configured.simulation_dict())
+
+
+class NotificationCredentialTests(_MockTransportTestCase):
+    """Resolve allowed webhook URLs while keeping credentials out of validation errors."""
+
     def test_missing_or_invalid_secret_has_a_sanitized_error(self):
         invalid_urls = [
             "http://discord.com/api/webhooks/123/token",
@@ -150,11 +191,11 @@ class NotificationConfigurationTests(_NotificationTest):
             _URL.replace("discord.com", "discord.com:invalid"),
         ]
         with mock.patch.dict(os.environ, {_ENV: ""}), self.assertRaisesRegex(ValueError, "missing"):
-            self.notifier()
+            self.make_notifier()
         for value in invalid_urls:
             with self.subTest(value=value), mock.patch.dict(os.environ, {_ENV: value}):
                 with self.assertRaises(ValueError) as caught:
-                    self.notifier()
+                    self.make_notifier()
                 self.assertNotIn(value, str(caught.exception))
                 self.assertNotIn("fictional_test_secret", str(caught.exception))
         self.build_opener.assert_not_called()
@@ -174,35 +215,12 @@ class NotificationConfigurationTests(_NotificationTest):
             _NoRedirect().redirect_request(None, None, 302, "redirect", {}, "https://example.com")
         )
 
-    def test_configuration_serializes_only_environment_name_and_preserves_science(self):
-        document = {
-            "name": "study",
-            "runs": [
-                {
-                    "name": "main",
-                    "protocol": {"type": "online", "params": {"horizon": 3}},
-                    "data": {"type": "gaussian_bandit", "params": {"means": [0.2, 0.8]}},
-                    "algorithms": [{"name": "learner", "type": "tests.test_settings:_Learner"}],
-                }
-            ],
-        }
-        with tempfile.TemporaryDirectory() as directory:
-            path = Path(directory) / "study.yml"
-            path.write_text(yaml.safe_dump(document), encoding="utf-8")
-            original = load_config(path)
-            document["notifications"] = {"discord": {"webhook_env": _ENV}}
-            path.write_text(yaml.safe_dump(document), encoding="utf-8")
-            configured = load_config(path)
-            persisted = yaml.safe_dump(configured.to_dict())
-        self.assertIn(_ENV, persisted)
-        self.assertNotIn(_URL, persisted)
-        self.assertNotIn("fictional_test_secret", persisted)
-        self.assertEqual(original.simulation_dict(), configured.simulation_dict())
 
+class NotificationTransportTests(_MockTransportTestCase):
+    """Inspect requests, bounded response reads, rate limits, and sanitized failures."""
 
-class NotificationTransportTests(_NotificationTest):
     def test_payload_suppresses_mentions_and_uses_post_with_a_timeout(self):
-        notifier = self.notifier(timeout_seconds=0.25)
+        notifier = self.make_notifier(timeout_seconds=0.25)
         content = notifier._message("started")
         notifier._send(content)
         request, timeout, _ = self.opener.calls[0]
@@ -217,8 +235,9 @@ class NotificationTransportTests(_NotificationTest):
         self.assertLessEqual(len(content), 2000)
 
     def test_429_respects_fractional_header_and_body_cooldown(self):
-        notifier = self.notifier()
-        body = _TrackedBody(b'{"retry_after": 2.75}')
+        """Use the longer server delay and permit the next request exactly at expiry."""
+        notifier = self.make_notifier()
+        body = _TrackedResponseBody(b'{"retry_after": 2.75}')
         error = urllib.error.HTTPError(_URL, 429, "limited", {"Retry-After": "1.5"}, body)
         self.opener.effect = mock.Mock(side_effect=[error, None])
         with mock.patch(
@@ -237,7 +256,7 @@ class NotificationTransportTests(_NotificationTest):
         self.assertTrue(body.closed)
 
     def test_success_headers_delay_subsequent_notifications(self):
-        notifier = self.notifier()
+        notifier = self.make_notifier()
         self.opener.headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset-After": "0.75"}
         with mock.patch(
             "experiments_wo_stress.execution.notifications.time.monotonic", return_value=100
@@ -252,8 +271,8 @@ class NotificationTransportTests(_NotificationTest):
             self.assertEqual(len(self.opener.calls), 2)
 
     def test_error_body_read_is_bounded_and_invalid_delay_uses_interval(self):
-        notifier = self.notifier()
-        body = _TrackedBody(b"{" + b" " * 100000)
+        notifier = self.make_notifier()
+        body = _TrackedResponseBody(b"{" + b" " * 100000)
         self.opener.effect = mock.Mock(
             side_effect=urllib.error.HTTPError(_URL, 429, _URL, {"Retry-After": "NaN"}, body)
         )
@@ -270,8 +289,8 @@ class NotificationTransportTests(_NotificationTest):
 
     def test_invalid_or_deleted_webhooks_disable_delivery(self):
         for status in (401, 403, 404):
-            notifier = self.notifier()
-            body = _TrackedBody(_URL.encode())
+            notifier = self.make_notifier()
+            body = _TrackedResponseBody(_URL.encode())
             self.opener.effect = mock.Mock(
                 side_effect=urllib.error.HTTPError(_URL, status, _URL, {}, body)
             )
@@ -296,7 +315,7 @@ class NotificationTransportTests(_NotificationTest):
             urllib.error.HTTPError(_URL, 503, _URL, {}, io.BytesIO(_URL.encode())),
         ]
         for error in errors:
-            notifier = self.notifier()
+            notifier = self.make_notifier()
             self.opener.effect = mock.Mock(side_effect=error)
             with (
                 self.subTest(error=type(error).__name__),
@@ -310,8 +329,11 @@ class NotificationTransportTests(_NotificationTest):
             self.assertNotIn("fictional_test_secret", " ".join(captured.output))
 
 
-class NotificationProgressTests(_NotificationTest):
+class NotificationProgressTests(_MockTransportTestCase):
+    """Summaries read bounded durable progress and accurately describe run status."""
+
     def test_durable_progress_reads_are_bounded_and_tolerate_invalid_files(self):
+        """Only a valid nonnegative integer step is eligible for a progress summary."""
         directory = Path("unused")
         values = [
             b'{"step": 12}',
@@ -322,13 +344,13 @@ class NotificationProgressTests(_NotificationTest):
             b"{incomplete",
         ]
         for index, value in enumerate(values):
-            body = _TrackedBody(value)
+            body = _TrackedResponseBody(value)
             with self.subTest(value=value), mock.patch.object(Path, "open", return_value=body):
                 self.assertEqual(
                     ExperimentNotifier._durable_step(directory), 12 if index == 0 else None
                 )
             self.assertEqual(body.read_sizes, [_MAX_PROGRESS_BYTES + 1])
-        body = _TrackedBody(b" " * (_MAX_PROGRESS_BYTES + 2))
+        body = _TrackedResponseBody(b" " * (_MAX_PROGRESS_BYTES + 2))
         with (
             mock.patch.object(Path, "open", return_value=body),
             mock.patch("experiments_wo_stress.execution.notifications.json.loads") as parse,
@@ -339,7 +361,7 @@ class NotificationProgressTests(_NotificationTest):
             self.assertIsNone(ExperimentNotifier._durable_step(directory))
 
     def test_only_four_active_checkpoints_are_read_and_all_runs_are_counted(self):
-        notifier = self.notifier()
+        notifier = self.make_notifier()
         notifier.total = 10
         for index in range(8):
             notifier.run_started(f"run-{index}", Path(f"private-{index}"), 100)
@@ -352,8 +374,38 @@ class NotificationProgressTests(_NotificationTest):
         self.assertIn("step 25/100", message)
         self.assertNotIn("private-", message)
 
+    def test_final_status_distinguishes_paused_completed_and_aborted(self):
+        notifier = self.make_notifier()
+        for final, expected in (
+            ({"completed": 3}, "completed"),
+            ({"paused": 1, "pending": 2}, "paused"),
+            ({"aborted": True, "pending": 3}, "aborted"),
+        ):
+            notifier._final = {key: final.get(key, 0) for key in (*notifier._counts, "pending")}
+            notifier._final["aborted"] = final.get("aborted", False)
+            with self.subTest(expected=expected):
+                self.assertIn(f"Run stage: {expected};", notifier._message("finished"))
+
+
+class NotificationDeliveryLifecycleTests(_MockTransportTestCase):
+    """The background sender reports progress without blocking coordinator callbacks."""
+
+    def test_background_thread_start_failure_does_not_abort_execution(self):
+        notifier = self.make_notifier()
+        with mock.patch.object(threading.Thread, "start", side_effect=RuntimeError(_URL)):
+            with self.assertLogs(
+                "experiments_wo_stress.execution.notifications", level="WARNING"
+            ) as captured:
+                notifier.start()
+        notifier.finish({"completed": 3})
+        self.assertFalse(notifier.enabled)
+        self.assertIsNone(notifier._thread)
+        self.assertEqual(self.opener.calls, [])
+        self.assertNotIn(_URL, " ".join(captured.output))
+
     def test_periodic_updates_continue_without_run_callbacks_and_finish_reports_failures(self):
-        notifier = self.notifier(timeout_seconds=0.1)
+        """The sender polls durable progress and emits a sanitized final failure summary."""
+        notifier = self.make_notifier(timeout_seconds=0.1)
         notifier.interval = 0.01
         progress_sent = threading.Event()
 
@@ -386,7 +438,8 @@ class NotificationProgressTests(_NotificationTest):
         self.assertTrue(all(name == "ews-discord" for _, _, name in self.opener.calls))
 
     def test_blocked_delivery_does_not_block_callbacks_and_finish_has_a_deadline(self):
-        notifier = self.notifier(timeout_seconds=0.01)
+        """A stuck transport cannot hold up progress callbacks or shutdown indefinitely."""
+        notifier = self.make_notifier(timeout_seconds=0.01)
         entered, release = threading.Event(), threading.Event()
 
         def blocked(_request):
@@ -413,7 +466,7 @@ class NotificationProgressTests(_NotificationTest):
         self.assertEqual(len(self.opener.calls), 1)
 
     def test_finish_during_a_retry_window_omits_delivery_without_waiting(self):
-        notifier = self.notifier(timeout_seconds=0.1)
+        notifier = self.make_notifier(timeout_seconds=0.1)
         self.opener.headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset-After": "300"}
         delivered = threading.Event()
         self.opener.effect = lambda _: delivered.set()
@@ -429,18 +482,6 @@ class NotificationProgressTests(_NotificationTest):
         self.assertFalse(notifier._thread.is_alive())
         self.assertEqual(len(self.opener.calls), 1)
         self.assertTrue(any("retry window" in line for line in captured.output))
-
-    def test_final_status_distinguishes_paused_completed_and_aborted(self):
-        notifier = self.notifier()
-        for final, expected in (
-            ({"completed": 3}, "completed"),
-            ({"paused": 1, "pending": 2}, "paused"),
-            ({"aborted": True, "pending": 3}, "aborted"),
-        ):
-            notifier._final = {key: final.get(key, 0) for key in (*notifier._counts, "pending")}
-            notifier._final["aborted"] = final.get("aborted", False)
-            with self.subTest(expected=expected):
-                self.assertIn(f"Run stage: {expected};", notifier._message("finished"))
 
 
 if __name__ == "__main__":

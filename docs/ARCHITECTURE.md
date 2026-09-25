@@ -7,6 +7,9 @@ The library plans runs, manages state and artifacts, and analyzes saved
 observations on one machine. For the public authoring interfaces, see the
 [configuration guide](CONFIGURATION.md).
 
+For an ordered walk through the implementation and its tests, see
+[Reading the code](CODE_GUIDE.md).
+
 ## Data flow and responsibilities
 
 ```text
@@ -38,10 +41,10 @@ The source tree follows six responsibilities:
 | --- | --- |
 | `study/` | Validated configuration, serializable run specifications, planning, and RNG derivation. `specs.py` keeps saved descriptions independent of component loading. |
 | `components/` | Extension contracts and dynamic loading. External study code implements these interfaces. |
-| `builtins/` | Library-supplied protocols, generators, bandit environments, and the optional Gymnasium adapter. |
+| `builtins/` | Library-supplied protocols, generators, bandit environments, bandit metrics, and the optional Gymnasium adapter. |
 | `execution/` | Request coordination, worker lifecycle, provenance, logging, and notifications. |
 | `storage/` | Immutable artifact models, atomic files, run checkpoints, experiment state, and cleanup. |
-| `analysis/` | Metrics, repeated-run aggregation, validated caches, and figure export. |
+| `analysis/` | General metric contracts and field metrics, repeated-run aggregation, validated caches, and figure export. |
 
 `ExecutionCoordinator` plans one invocation, publishes its prepared request, and
 schedules bounded work while owning signals and notifications. Each worker creates
@@ -177,6 +180,12 @@ every action or reward rejects an incomplete trajectory; unrecorded data cannot
 be reconstructed from a figure or cache. Aggregation combines compatible
 repetitions with aligned coordinates and an explicit uncertainty convention. One
 repetition has no defined sample standard deviation or standard error.
+
+The analysis pipeline does not define a universal regret measure. The supplied
+`pseudo_regret` and `realized_regret` metrics live in `builtins/metrics.py` because
+they assume bandit actions, arm rewards, and a particular comparator. Their short
+YAML names are convenience aliases; a study can supply its own metric for a
+different scientific definition.
 
 Metric, aggregate, and figure artifacts have separate validated caches. Their
 identities include relevant inputs, requested result boundaries, implementation,

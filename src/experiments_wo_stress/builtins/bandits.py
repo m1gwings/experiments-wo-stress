@@ -36,6 +36,11 @@ class StationaryBandit:
 
     The generator emits observations only. Regret and other scientific metrics
     are computed afterward from the persisted means, actions, and rewards.
+
+    Instance creation fixes the arm means using the instance RNG when needed.
+    Each call to ``generate`` samples only the chosen arm using the data RNG and
+    advances the environment's step counter. Checkpoints retain that counter;
+    the executor stores RNG state and the immutable instance separately.
     """
 
     supports_extension = True
@@ -98,12 +103,14 @@ class StationaryBandit:
         self.step = 0
 
     def context(self) -> dict[str, int]:
+        """Tell the learner how many arms are available without exposing their means."""
         return {"n_arms": self.means.shape[-1]}
 
     def _current_means(self) -> np.ndarray:
         return self.means
 
     def generate(self, request: Any) -> Feedback:
+        """Sample the selected arm and expose its reward for learning and recording."""
         if (
             isinstance(request, bool)
             or not isinstance(request, (int, np.integer))
@@ -120,6 +127,7 @@ class StationaryBandit:
         return Feedback(reward, {"action": int(request), "reward": reward})
 
     def state_dict(self) -> dict[str, int]:
+        """Save elapsed interaction steps, independently of immutable arm means."""
         return {"step": self.step}
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
@@ -135,7 +143,11 @@ class StationaryBandit:
 
 
 class GaussianBandit(StationaryBandit):
-    """Stationary bandit with Gaussian rewards and configurable noise scale."""
+    """Specialize StationaryBandit to Gaussian rewards with configurable noise.
+
+    Instance creation fixes the distribution to Gaussian; interaction and step
+    checkpointing use the stationary implementation unchanged.
+    """
 
     supports_extension = True
 
@@ -176,6 +188,10 @@ class NonstationaryBandit(StationaryBandit):
 
     Budgets can extend within the supplied schedule. Exhausting it raises an
     error instead of inventing unconfigured rewards beyond its final row.
+
+    ``step`` indexes the next schedule row. The inherited generation method
+    samples the chosen arm from that row, then advances the counter; restoring
+    the counter and data RNG resumes the same point in the saved schedule.
     """
 
     supports_extension = True

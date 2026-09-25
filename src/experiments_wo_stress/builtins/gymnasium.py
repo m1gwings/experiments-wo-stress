@@ -24,6 +24,11 @@ class GymnasiumAdapter:
     ``factory`` defaults to ``gymnasium:make`` and receives ``env_params``. That
     optional package is imported only when selected. Other factories implementing
     the same public environment API also work.
+
+    The saved instance records the factory, options, and initial seed. This
+    object owns the live environment and reset flags, while RLProtocol owns the
+    learner-facing observation and episode progress. Checkpoints combine the
+    user adapter's environment snapshot with those reset flags.
     """
 
     supports_extension = True
@@ -84,6 +89,7 @@ class GymnasiumAdapter:
         self.needs_reset = True
 
     def reset(self) -> tuple[Any, Mapping[str, Any]]:
+        """Start an episode, applying the saved seed only on the first reset."""
         seed = None if self.initialized else self.initial_seed
         observation, info = self.env.reset(seed=seed, options=copy.deepcopy(self.reset_options))
         if not isinstance(info, Mapping):
@@ -93,6 +99,7 @@ class GymnasiumAdapter:
         return observation, info
 
     def generate(self, request: Any) -> Feedback:
+        """Take one environment action and package the transition for RLProtocol."""
         if not self.initialized or self.needs_reset:
             raise RuntimeError("Reset the environment before taking an action")
         observation, reward, terminated, truncated, info = self.env.step(request)
@@ -112,6 +119,7 @@ class GymnasiumAdapter:
         )
 
     def state_dict(self) -> dict[str, Any]:
+        """Snapshot the environment through its adapter and retain reset bookkeeping."""
         environment = self.adapter.snapshot(self.env)
         if not isinstance(environment, Mapping):
             raise TypeError("Environment snapshot must be a mapping")
@@ -122,6 +130,7 @@ class GymnasiumAdapter:
         }
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        """Restore the live environment and its position in the reset/step lifecycle."""
         if (
             set(state) != {"environment", "initialized", "needs_reset"}
             or not isinstance(state["initialized"], bool)
@@ -134,6 +143,7 @@ class GymnasiumAdapter:
         self.needs_reset = state["needs_reset"]
 
     def close(self) -> None:
+        """Release environment resources when the run session ends or fails."""
         close = getattr(self.env, "close", None)
         if callable(close):
             close()

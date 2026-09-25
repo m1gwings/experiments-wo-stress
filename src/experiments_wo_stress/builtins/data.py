@@ -14,7 +14,11 @@ from ..storage.models import Instance
 
 
 class NullDataGenerator(StateMixin):
-    """A stateless placeholder for self-contained trial functions."""
+    """Supply an empty data source for trials that generate their own inputs.
+
+    ``generate`` returns None, and the checkpoint contains no scientific state.
+    The injected RNG remains available to a trial through this object.
+    """
 
     supports_extension = True
 
@@ -22,11 +26,18 @@ class NullDataGenerator(StateMixin):
         self.rng = rng
 
     def generate(self, request: Any = None) -> None:
+        """Return no dataset; the trial function supplies its own inputs."""
         return None
 
 
 class NormalDataGenerator(StateMixin):
-    """Draw an offline dataset from a normal distribution."""
+    """Draw normally distributed offline data with a configured shape and scale.
+
+    The immutable instance describes the distribution. Each ``generate`` call
+    draws fresh samples from the data RNG, using the configured shape unless the
+    request supplies another shape. No evolving state beyond that RNG is needed,
+    so the executor's RNG snapshot is sufficient for continuation.
+    """
 
     @classmethod
     def create_instance(
@@ -77,6 +88,7 @@ class NormalDataGenerator(StateMixin):
         self.scale = scale
 
     def generate(self, request: Any = None) -> np.ndarray:
+        """Draw one dataset using the requested shape or the configured default."""
         size = self.size if request is None else request
         return self.rng.normal(loc=self.loc, scale=self.scale, size=size)
 
@@ -161,6 +173,7 @@ class CSVDataGenerator:
         self.cursor = 0
 
     def generate(self, request: Any = None) -> np.ndarray:
+        """Return all rows, or consume up to the requested number from the cursor."""
         if request is None:
             return self.values
         if isinstance(request, bool) or not isinstance(request, int) or request < 1:
@@ -171,9 +184,11 @@ class CSVDataGenerator:
         return result
 
     def state_dict(self) -> dict[str, int]:
+        """Save the next unread row; the immutable dataset is persisted separately."""
         return {"cursor": self.cursor}
 
     def load_state_dict(self, state: Mapping[str, Any]) -> None:
+        """Restore a cursor that lies within the persisted dataset."""
         cursor = state.get("cursor")
         if (
             set(state) != {"cursor"}

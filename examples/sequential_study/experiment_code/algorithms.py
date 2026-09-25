@@ -8,7 +8,12 @@ import numpy as np
 
 
 class _SampleMeans:
-    """Shared bookkeeping for this paper's two learning rules."""
+    """Keep the per-arm counts and reward sums used by both learning rules.
+
+    The first action can learn the arm count from the environment's context.
+    Each observation updates only the chosen arm; checkpoints preserve these
+    sufficient statistics. The executor saves the injected RNG separately.
+    """
 
     def __init__(self, *, rng: np.random.Generator, n_arms: int | None = None) -> None:
         if n_arms is not None and n_arms < 2:
@@ -43,8 +48,10 @@ class _SampleMeans:
 class UCB(_SampleMeans):
     """An illustrative upper-confidence algorithm for the example study.
 
-    The exploration constant is a study parameter; this implementation does not
-    claim a confidence guarantee for every possible reward distribution.
+    Play each arm once, then choose the largest empirical mean plus an
+    exploration bonus. The exploration constant is a study parameter; this
+    implementation does not claim a confidence guarantee for every possible
+    reward distribution.
     """
 
     supports_extension = True
@@ -67,7 +74,12 @@ class UCB(_SampleMeans):
 
 
 class EpsilonGreedy(_SampleMeans):
-    """Explore with fixed probability; otherwise choose the largest sample mean."""
+    """Explore with fixed probability; otherwise choose the largest sample mean.
+
+    Play every arm once before applying the exploration rule. Counts and reward
+    sums come from the shared base class; all random choices use the run's
+    injected algorithm RNG so resuming preserves the action sequence.
+    """
 
     supports_extension = True
 

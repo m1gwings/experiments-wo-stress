@@ -22,6 +22,8 @@ import time
 from experiments_wo_stress import Feedback
 
 class Environment:
+    """Accumulate a random position slowly enough for the test to send SIGTERM."""
+
     def __init__(self, *, rng):
         self.rng = rng
         self.position = 0.0
@@ -38,6 +40,8 @@ class Environment:
         self.position = state["position"]
 
 class Learner:
+    """Use saved reward history and injected randomness when choosing each action."""
+
     def __init__(self, *, rng):
         self.rng = rng
         self.total = 0.0
@@ -57,7 +61,10 @@ class Learner:
 
 
 class CommandLineTests(unittest.TestCase):
+    """Exercise the real CLI in subprocesses, including POSIX signal recovery."""
+
     def setUp(self) -> None:
+        """Create a standalone study with slow, stateful paper components."""
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
@@ -81,9 +88,11 @@ class CommandLineTests(unittest.TestCase):
         self.config.write_text(yaml.safe_dump(settings), encoding="utf-8")
 
     def command(self, *args: str) -> list[str]:
+        """Invoke the installed package with the same interpreter running these tests."""
         return [sys.executable, "-m", "experiments_wo_stress", *args]
 
     def invoke(self, *args: str) -> dict:
+        """Run a successful CLI command and decode its machine-readable report."""
         result = subprocess.run(self.command(*args), capture_output=True, text=True, timeout=30)
         self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
         return json.loads(result.stdout)
@@ -96,6 +105,7 @@ class CommandLineTests(unittest.TestCase):
 
     @unittest.skipUnless(os.name == "posix", "requires POSIX SIGTERM semantics")
     def test_sigterm_checkpoints_and_resumes_with_identical_results(self) -> None:
+        """Interrupt after a durable checkpoint, resume with two workers, and compare every row."""
         interrupted = self.root / "interrupted"
         process = subprocess.Popen(
             self.command("run", str(self.config), "--output", str(interrupted)),
@@ -104,6 +114,7 @@ class CommandLineTests(unittest.TestCase):
             text=True,
         )
         try:
+            # Wait for a committed step so SIGTERM exercises recovery from real work.
             deadline = time.monotonic() + 15
             checkpoint_found = False
             while time.monotonic() < deadline:
@@ -128,11 +139,13 @@ class CommandLineTests(unittest.TestCase):
                 process.kill()
             process.communicate(timeout=15)
 
+        # A resumed subprocess must finish all runs despite a changed worker count.
         resumed = self.invoke(
             "run", str(self.config), "--output", str(interrupted), "--workers", "2"
         )
         self.assertEqual(resumed["completed"] + resumed["skipped"], 2)
         self.assertEqual(resumed["failed"], 0)
+        # The uninterrupted execution is the reference for every value and step.
         reference = self.root / "reference"
         self.assertEqual(
             self.invoke("run", str(self.config), "--output", str(reference))["completed"], 2

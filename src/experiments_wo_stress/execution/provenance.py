@@ -201,7 +201,13 @@ def _component_sources(component: ComponentSpec) -> dict[str, str]:
 
 @dataclass(frozen=True)
 class PreparedRequest:
-    """Variant identities and request metadata ready for durable publication."""
+    """Carry the result of variant selection to the experiment store for publication.
+
+    ``locations`` maps scientific run IDs to retained storage IDs. ``variants``
+    holds each selected run directory's metadata, while ``metadata`` describes
+    the complete active request saved under ``request_id``. Computing this value
+    does not modify artifacts; the coordinator publishes it while holding a lock.
+    """
 
     locations: dict[str, str]
     variants: dict[str, dict[str, Any]]
@@ -244,6 +250,8 @@ def prepare_request(
                 "environment": provenance["environment"],
             }
         )
+        # A larger budget can reuse a variant only if every component declares
+        # continuation support. Recording and code still select distinct variants.
         identity = {
             "science": scientific,
             "code": code_signature,

@@ -26,7 +26,12 @@ from .worker import execute_run, initialize_worker
 
 @dataclass
 class RunReport:
-    """Counts for a single execution request; failures retain per-run explanations."""
+    """Summarize the outcome of one invocation, including per-run failure messages.
+
+    Workers return completed, skipped, paused, or failed outcomes. The coordinator
+    counts unsubmitted work as pending after interruption; skipped means a valid
+    saved result already covered the requested budget.
+    """
 
     completed: int = 0
     skipped: int = 0
@@ -36,9 +41,11 @@ class RunReport:
     errors: dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Return plain counts and errors for CLI output and coordinator summaries."""
         return asdict(self)
 
     def add(self, result: tuple[str, str, str | None]) -> None:
+        """Accumulate one worker's run ID, terminal status, and optional error."""
         run_id, status, error = result
         setattr(self, status, getattr(self, status) + 1)
         if error:
@@ -50,6 +57,11 @@ class ExecutionCoordinator:
 
     Only plain run descriptions and execution options cross the process boundary.
     Scientific components and their mutable state are owned by worker RunSessions.
+
+    ``run`` plans and validates the request, acquires the experiment lock, selects
+    retained variants, and schedules workers. A shared stop event lets active runs
+    checkpoint at step boundaries while leaving unscheduled work pending. The
+    coordinator combines worker outcomes into a RunReport and closes notifications.
     """
 
     def __init__(
@@ -88,6 +100,7 @@ class ExecutionCoordinator:
         self.notifier = ExperimentNotifier(
             self.config.notifications, self.config.name, len(self.plan)
         )
+        # Check component contracts before publishing a durable execution request.
         provenance = collect_provenance(self.config, preflight(self.plan))
         self.store.root.mkdir(parents=True, exist_ok=True)
         with self._signal_handlers(), self.store.lock():

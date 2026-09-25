@@ -75,7 +75,13 @@ def validate_notifications(value: Any) -> dict[str, Any]:
 
 @dataclass(frozen=True)
 class ExperimentConfig:
-    """Effective experiment settings; source_dir is an import/path context."""
+    """Hold the effective settings consumed by planning, execution, and analysis.
+
+    ``load_config`` validates YAML, applies defaults, and resolves file paths
+    before constructing this value. ``runs`` describes scientific groups;
+    execution, recording, analysis, and notification options control their later
+    stages. ``source_dir`` supplies import/path context and is not serialized.
+    """
 
     name: str
     seed: int
@@ -87,6 +93,7 @@ class ExperimentConfig:
     notifications: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:
+        """Copy the effective configuration for resolved YAML and provenance."""
         return copy.deepcopy(
             {
                 "name": self.name,

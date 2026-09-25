@@ -24,7 +24,13 @@ def canonical_json(value: Any) -> str:
 
 @dataclass(frozen=True)
 class ComponentSpec:
-    """An importable component and its constructor parameters."""
+    """Describe how to construct a component without constructing it during planning.
+
+    ``type`` is a built-in alias or import path; ``params`` contains paper-supplied
+    constructor arguments. An optional ``seed`` overrides the component's stream
+    seed. ``dependencies`` names additional files tracked for variant selection.
+    RNGs, instances, and loggers are injected later by the execution layer.
+    """
 
     type: str
     params: dict[str, Any] = field(default_factory=dict)
@@ -32,6 +38,7 @@ class ComponentSpec:
     dependencies: tuple[str, ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
+        """Return a transportable description with independent parameter containers."""
         value = {"type": self.type, "params": copy.deepcopy(self.params), "seed": self.seed}
         if self.dependencies:
             value["dependencies"] = list(self.dependencies)
@@ -39,6 +46,7 @@ class ComponentSpec:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> ComponentSpec:
+        """Rebuild a descriptor from its serialized fields and optional defaults."""
         return cls(
             value["type"],
             copy.deepcopy(value.get("params", {})),
@@ -49,7 +57,13 @@ class ComponentSpec:
 
 @dataclass(frozen=True)
 class RunSpec:
-    """The complete scientific inputs for one repetition of one algorithm."""
+    """Describe one algorithm repetition, its scientific inputs, and requested budget.
+
+    Planners create these values with ``make_run_spec``; workers construct fresh
+    components from them. ``run_id`` identifies the science independently of grid
+    order and worker scheduling. ``budget_steps`` is a separate execution target;
+    provenance and recording choices determine the retained storage variant.
+    """
 
     run_id: str
     group: str
@@ -62,6 +76,7 @@ class RunSpec:
     budget_steps: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
+        """Return the plain description sent to workers and saved in request metadata."""
         return {
             "run_id": self.run_id,
             "group": self.group,
@@ -76,6 +91,7 @@ class RunSpec:
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> RunSpec:
+        """Rebuild a saved description, including its three component descriptors."""
         fields = dict(value)
         for name in ("algorithm", "data", "protocol"):
             fields[name] = ComponentSpec.from_dict(fields[name])

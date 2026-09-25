@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
+from ..builtins.metrics import PseudoRegretMetric, RealizedRegretMetric
 from ..components.loading import load_class
 from ..storage import experiment as experiment_storage
 from ..storage.files import atomic_json, digest_file, fingerprint, read_json, write_arrays
@@ -19,7 +20,14 @@ from ..study.planning import plan_runs
 from ..study.specs import RunSpec, canonical_json
 from . import metrics as metric_definitions
 from .cache import AnalysisCache, cache_identity, safe_name, source_identity
-from .metrics import BUILTIN_METRICS, Metric, MetricResult, validate_requirements
+from .metrics import CumulativeSumMetric, FieldMetric, Metric, MetricResult, validate_requirements
+
+BUILTIN_METRICS = {
+    "field": FieldMetric,
+    "cumulative_sum": CumulativeSumMetric,
+    "pseudo_regret": PseudoRegretMetric,
+    "realized_regret": RealizedRegretMetric,
+}
 
 if TYPE_CHECKING:
     from ..storage.models import RunResult
@@ -28,7 +36,13 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class Summary:
-    """Pointwise estimates for one metric and one group of independent runs."""
+    """Hold an aggregate curve for one metric and one group of independent runs.
+
+    ``labels`` identifies the configured group. ``mean`` and ``uncertainty`` share
+    coordinates ``x``; ``count`` is the number of distinct repetitions contributing
+    at every point. ``uncertainty_kind`` names standard deviation, standard error,
+    or no uncertainty, so table and figure consumers can interpret the values.
+    """
 
     metric: str
     labels: dict[str, Any]
@@ -41,7 +55,12 @@ class Summary:
 
 @dataclass
 class _RepetitionAccumulator:
-    """Accumulate independent repetitions while enforcing compatible curves."""
+    """Maintain a pointwise running mean and variance numerator for one group.
+
+    Each incoming curve must share the group's scientific identity and exact x
+    coordinates, and contribute a previously unseen repetition. Welford's update
+    keeps only the mean and squared deviations, avoiding storage of every curve.
+    """
 
     x: np.ndarray
     mean: np.ndarray
@@ -62,6 +81,8 @@ class _RepetitionAccumulator:
             raise ValueError("Repetitions in an analysis group have mismatched x coordinates")
         self.repetitions.add(repetition)
         self.count += 1
+        # Welford's update accumulates the variance numerator without subtracting
+        # two potentially large sums at the end of aggregation.
         delta = result.values - self.mean
         self.mean += delta / self.count
         self.squared_deviations += delta * (result.values - self.mean)
@@ -69,6 +90,13 @@ class _RepetitionAccumulator:
 
 @dataclass(frozen=True)
 class _CachedMetric:
+    """Reference a saved per-run metric curve without keeping its arrays in memory.
+
+    Group labels and scientific identity govern pooling; the cache key identifies
+    the metric's exact inputs and implementation. Aggregation loads the curve from
+    ``directory`` only when needed and uses ``identity`` to version its output.
+    """
+
     metric: str
     labels: dict[str, Any]
     scientific_identity: str
@@ -258,6 +286,8 @@ def analyze(config: ExperimentConfig, output_dir: str | Path) -> list[Summary]:
     cache = AnalysisCache(output_dir)
     entries: list[_CachedMetric] = []
     completed = 0
+    # Compute or reuse each metric while only one run's raw observations are
+    # loaded. Retain lightweight references for the subsequent aggregation pass.
     for run_spec, results in experiment_storage.iter_completed_runs(output_dir):
         completed += 1
         try:
@@ -279,6 +309,8 @@ def analyze(config: ExperimentConfig, output_dir: str | Path) -> list[Summary]:
             )
     if not completed:
         raise ValueError("No validated completed runs are available for analysis")
+    # Canonical order gives an aggregate the same identity regardless of the order
+    # in which run artifacts happened to be produced or discovered.
     entries.sort(key=lambda entry: (entry.metric, canonical_json(entry.labels), entry.run_id))
     aggregate_identity = cache_identity(
         "aggregate",
@@ -370,6 +402,8 @@ def _aggregate_metrics(entries: list[_CachedMetric], uncertainty_kind: str) -> l
         if uncertainty_kind != "none":
             uncertainty.fill(np.nan)
             if accumulator.count > 1:
+                # The sample variance uses independent repetitions, not time
+                # points. One repetition leaves uncertainty undefined (NaN).
                 variance = accumulator.squared_deviations / (accumulator.count - 1)
                 uncertainty = np.sqrt(np.maximum(variance, 0))
                 if uncertainty_kind == "standard_error":

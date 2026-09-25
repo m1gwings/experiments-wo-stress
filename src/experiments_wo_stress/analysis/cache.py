@@ -69,6 +69,11 @@ class AnalysisCache:
     Writers populate a temporary directory. A checksum manifest is published with
     it through a directory rename, so readers see either a complete generation or
     no generation. Existing generations are validated before reuse.
+
+    Metrics, aggregates, and figures each have their own collection of generations
+    identified by upstream data and implementation. ``export`` copies selected
+    files to convenient current paths while preserving the immutable generations.
+    Damaged generations raise an error instead of being silently reused.
     """
 
     def __init__(self, output_dir: str | Path) -> None:

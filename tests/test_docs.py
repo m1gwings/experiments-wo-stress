@@ -10,6 +10,8 @@ from scripts.check_docs import markdown_errors
 
 
 class DocumentationCheckTests(unittest.TestCase):
+    """Report broken local references and Markdown fences without fetching external links."""
+
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory()
         self.addCleanup(temporary.cleanup)
@@ -17,6 +19,7 @@ class DocumentationCheckTests(unittest.TestCase):
         self.path = self.root / "README.md"
 
     def check_text(self, text: str) -> list[str]:
+        """Check one synthetic README against its disposable repository root."""
         self.path.write_text(text, encoding="utf-8")
         return markdown_errors(self.path, self.root)
 

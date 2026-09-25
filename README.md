@@ -181,6 +181,8 @@ The main guard is needed when starting multiple worker processes.
 
 ## Documentation and development
 
+- [Reading the code](docs/CODE_GUIDE.md) — where to start, how a run flows
+  through the implementation, and which tests explain each behavior.
 - [Configuration and extension guide](docs/CONFIGURATION.md) — YAML, component
   contracts, and user-facing rules.
 - [Architecture](docs/ARCHITECTURE.md) — identities, artifacts, storage, and

@@ -36,6 +36,11 @@ class ExperimentStore:
 
     Execution supplies already prepared identities and provenance. This store
     validates and publishes their metadata without making scientific decisions.
+
+    The active request selects which retained run variants to execute or analyze;
+    older variants remain in ``runs`` for later reuse. The coordinator holds the
+    experiment lock while publishing and executing a request. Per-run checkpoint
+    mechanics belong to RunStore, while instance files are shared by content.
     """
 
     def __init__(self, root: str | Path) -> None:

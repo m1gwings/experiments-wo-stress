@@ -15,7 +15,7 @@ contract, with real-paper validation still needed before declaring it stable.
 - `src/experiments_wo_stress/`: package and `ews` CLI.
   - `study/`: configuration, run descriptions, planning, and stable random streams.
   - `components/`: extension contracts and component loading.
-  - `builtins/`: supplied protocols, data generators, bandits, and Gymnasium adapter.
+  - `builtins/`: supplied protocols, data generators, bandits, bandit metrics, and Gymnasium adapter.
   - `execution/`: coordination, run sessions, provenance, logs, and notifications.
   - `storage/`: artifact models, experiment ownership, checkpoints, and cleanup.
   - `analysis/`: metrics, aggregation, caches, and figures.
@@ -23,6 +23,7 @@ contract, with real-paper validation still needed before declaring it stable.
 - `examples/sequential_study/`: repeated Gaussian bandit study with custom components.
 - `examples/offline_csv/`: stored-data example.
 - `tests/`: configuration, execution, persistence, analysis, and CLI checks.
+- `docs/CODE_GUIDE.md`: guided source reading order and a map of behavior-focused tests.
 - `docs/ARCHITECTURE.md`: component boundaries, reproducibility, and artifact contract.
 - `docs/CONFIGURATION.md`: configuration reference and extension guide.
 - `docs/LLM_GUIDE.md`: self-contained public authoring contract for use with a paper PDF.
@@ -58,6 +59,11 @@ contract, with real-paper validation still needed before declaring it stable.
   focused responsibilities, useful errors, complete docstrings at public boundaries,
   consistent formatting, and proportionate verification. Remove stale comments,
   dead code, and scaffolding introduced by the change.
+- Keep classes and tests readable for repository inspection. Class docstrings
+  explain responsibility, owned state, and lifecycle; comments explain non-obvious
+  ordering and invariants. Group tests by behavior, document module/class scope,
+  and name each scenario by the result it verifies. Keep the code-reading guide
+  current when implementation owners or test organization change.
 - Keep documentation part of the implementation. Update every affected reference
   in the README, architecture/configuration docs, examples, and contributor guidance
   when behavior or a public contract changes. Surface material design choices

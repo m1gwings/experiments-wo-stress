@@ -94,7 +94,14 @@ def read_result_prefix(
 
 
 class RunStore:
-    """One writer's view of a run directory and its committed generations."""
+    """Own one retained run variant's progress, checkpoints, and result manifests.
+
+    A Recorder writes numerical chunks; a RunSession supplies matching component
+    and RNG state. ``checkpoint`` writes a generation, then atomically publishes
+    progress pointing to it. ``restore`` finds a valid retained generation and
+    discards uncommitted result tails. Completed prefixes stay pinned so extension
+    and recovery cannot silently remove results already published as complete.
+    """
 
     def __init__(
         self, directory: Path, *, compression: bool = False, keep_checkpoints: int = 2
@@ -158,6 +165,8 @@ class RunStore:
             reverse=True,
         )
         entries.extend(item["checkpoint"] for item in completed_prefixes if item.get("checkpoint"))
+        # Try the current checkpoint first, then retained predecessors. Both state
+        # files and their referenced result chunks must validate before resuming.
         for index, entry in enumerate(entries):
             generation = entry.get("generation", "")
             if not re.fullmatch(r"[a-f0-9]{32}", generation):
@@ -229,6 +238,7 @@ class RunStore:
             "checkpoint_bytes": size,
             "checkpoint_count": self.progress.get("checkpoint_count", 0) + 1,
         }
+        # This replacement is the commit point: all referenced files are complete.
         atomic_json(self.progress_path, progress)
         self.progress = progress
         # Publication comes first: failure here may leave extra generations, never
@@ -272,7 +282,14 @@ class RunStore:
 
 
 class Recorder:
-    """Buffer fixed-schema numerical columns with a configurable memory target."""
+    """Select observations and buffer numerical columns for one active run.
+
+    The first recorded row fixes field names, shapes, and dtypes. Later rows must
+    match that schema, including after restoration. Buffers grow up to the memory
+    target (or one oversized row), then flush to numbered NumPy chunks. A flush
+    makes a chunk available; a RunStore checkpoint commits the resulting manifest
+    together with the matching execution state.
+    """
 
     def __init__(
         self, store: RunStore, options: Mapping[str, Any], manifest: dict[str, Any]

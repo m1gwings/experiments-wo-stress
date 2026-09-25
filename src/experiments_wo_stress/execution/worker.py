@@ -33,6 +33,11 @@ class RunSession:
     Components are constructed in scientific order and restored together with their
     RNGs. A checkpoint is published only after a complete protocol step and after
     the corresponding observations have been flushed.
+
+    ``run`` first checks for reusable completion, then restores or initializes the
+    components, advances the protocol, and commits either a pause or completion.
+    The session controls persistence timing; the protocol owns interaction order,
+    the algorithm owns learning state, and the data generator owns environment state.
     """
 
     def __init__(
@@ -116,6 +121,8 @@ class RunSession:
         else:
             for name, component in self.components.items():
                 component.load_state_dict(checkpoint[name])
+            # Construction or state loading may consume randomness. Restore RNGs
+            # afterward so the next step starts at the saved draw positions.
             for name, rng in self.rngs.items():
                 rng.bit_generator.state = checkpoint["rngs"][name]
             if self.protocol.step != restored_step:
@@ -149,6 +156,8 @@ class RunSession:
 
     def checkpoint(self, status: str = "running") -> None:
         """Commit observations, component state, and RNG state at the same boundary."""
+        # Flushing creates chunks; RunStore's progress publication commits them
+        # together with the component and RNG snapshot at this exact step.
         self.recorder.flush()
         state = {name: component.state_dict() for name, component in self.components.items()}
         state["rngs"] = {name: rng.bit_generator.state for name, rng in self.rngs.items()}

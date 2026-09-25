@@ -344,7 +344,9 @@ Built-in metrics include `field`, `cumulative_sum`, `pseudo_regret`, and
 `realized_regret`. Pseudo-regret uses saved actions and instance `means`, with a
 `dynamic` or `best_fixed` comparator. Realized regret instead requires saved
 counterfactual rewards for every arm; means alone cannot determine it. Inspect the
-paper's comparator and what data it requires before choosing a metric.
+paper's comparator and what data it requires before choosing a metric. The regret
+aliases refer to supplied bandit metrics, not a general analysis rule; implement
+a paper-specific metric when their definitions do not match.
 
 `repeated_runs` averages compatible independent repetitions. Include varying
 scientific parameters in `group_by`; coordinates must align. Uncertainty may be

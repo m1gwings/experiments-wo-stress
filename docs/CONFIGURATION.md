@@ -313,7 +313,7 @@ real scalar or matching one-dimensional coordinates and values.
 `final_outputs` exposes final recorded fields for single-step offline/trial results.
 Multiple-step results use `records`; an arbitrary final-output hook is not provided.
 
-Built-in metrics include:
+The general field metrics and optional bandit metrics are available by short name:
 
 - `field`: select a saved field using `params.field`, optionally choosing `params.x`.
 - `cumulative_sum`: sum a field across a complete recorded trajectory.
@@ -324,6 +324,10 @@ Built-in metrics include:
   `counterfactual_rewards` matrix, defaulting to the best fixed arm. Recorded
   rewards must agree with the selected matrix entries; arm means alone are
   insufficient to determine this quantity.
+
+The two regret implementations are supplied bandit metrics in `builtins/metrics.py`,
+not requirements of the analysis interface. Use a custom metric when the study's
+regret definition or comparator differs.
 
 Custom metrics can declare `required_fields`, `required_instance_fields`,
 `requires_complete_trajectory`, and `dependency_files`. Dependency paths are

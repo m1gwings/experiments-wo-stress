@@ -8,7 +8,13 @@ import numpy as np
 
 
 class MeanEstimator:
-    """Estimate the sample mean and unbiased sample variance of one CSV column."""
+    """Estimate the sample mean and unbiased sample variance of one CSV column.
+
+    The offline protocol supplies the dataset in one ``fit`` call. The estimator
+    validates the selected column, computes its summaries, and returns numerical
+    observations for recording. Its checkpoint stores the last result; it needs
+    no access to the CSV file or to execution machinery.
+    """
 
     def __init__(self, *, rng: np.random.Generator, column: int = 0) -> None:
         self.rng = rng
