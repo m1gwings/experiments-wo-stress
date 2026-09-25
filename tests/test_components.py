@@ -346,6 +346,27 @@ class ComponentTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 restored.load_state_dict({"cursor": 10})
 
+    def test_legacy_component_paths_preserve_alias_resolution(self):
+        component_paths = {
+            "online": "experiments_wo_stress.protocols:OnlineProtocol",
+            "offline": "experiments_wo_stress.protocols:OfflineProtocol",
+            "trial": "experiments_wo_stress.protocols:TrialProtocol",
+            "rl": "experiments_wo_stress.protocols:RLProtocol",
+            "csv": "experiments_wo_stress.data:CSVDataGenerator",
+            "normal": "experiments_wo_stress.data:NormalDataGenerator",
+            "null": "experiments_wo_stress.data:NullDataGenerator",
+            "null_algorithm": "experiments_wo_stress.components:NullAlgorithm",
+            "stationary_bandit": "experiments_wo_stress.settings:StationaryBandit",
+            "gaussian_bandit": "experiments_wo_stress.settings:GaussianBandit",
+            "nonstationary_bandit": "experiments_wo_stress.settings:NonstationaryBandit",
+            "gymnasium": "experiments_wo_stress.settings:GymnasiumAdapter",
+        }
+        for alias, qualified_path in component_paths.items():
+            with self.subTest(alias=alias):
+                self.assertIs(resolve_type(alias), resolve_type(qualified_path))
+                component_spec = ComponentSpec(qualified_path)
+                self.assertEqual(component_spec.to_dict()["type"], qualified_path)
+
     def test_component_resolution_and_parameters(self):
         self.assertIs(resolve_type("normal"), NormalDataGenerator)
         instance = construct(ComponentSpec("normal", {"size": 5}), np.random.default_rng(1))

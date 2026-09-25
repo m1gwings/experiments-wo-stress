@@ -30,6 +30,40 @@ to its constructor. If evaluation needs a realized hidden quantity, the
 generator must record it as a measurement rather than mutate the instance or
 accumulate a metric internally.
 
+## Source organization
+
+The source tree follows six responsibilities:
+
+| Package | Responsibility |
+| --- | --- |
+| `study/` | Validated configuration, serializable run specifications, planning, and RNG derivation. `specs.py` keeps saved descriptions independent of component loading. |
+| `components/` | Extension contracts and dynamic loading. External study code implements these interfaces. |
+| `builtins/` | Library-supplied protocols, generators, bandit environments, and the optional Gymnasium adapter. |
+| `execution/` | Request coordination, worker lifecycle, provenance, logging, and notifications. |
+| `storage/` | Immutable artifact models, atomic files, run checkpoints, experiment state, and cleanup. |
+| `analysis/` | Metrics, repeated-run aggregation, validated caches, and figure export. |
+
+`ExecutionCoordinator` plans one invocation, publishes its prepared request, and
+schedules bounded work while owning signals and notifications. Each worker creates
+a `RunSession`, which owns its components, RNGs, recorder, and checkpoint lifecycle.
+The process-pool entry point remains a module-level function.
+
+`ExperimentStore` owns the output root, lock, retained variants, and request
+publication. Execution computes scientific identities before passing them to the
+store. `RunStore` owns one variant's durable boundaries; `Recorder` buffers its
+observations. `AnalysisCache` handles immutable cache generations and exports,
+while metric computation and aggregation remain in the analysis pipeline.
+
+Storage has no execution dependency. Configuration validates notification options
+without importing the sender. Figures share cache operations with the pipeline
+and use its public analysis result. Scientific components are loaded only when
+planning or execution requires them; saved results remain usable without the
+study's simulation modules.
+
+Root exports and documented historical submodules remain available through thin
+compatibility facades. Internal code imports the owning modules. Existing built-in
+aliases and qualified component strings retain their meaning.
+
 ## Reproducibility
 
 The experiment seed feeds separate NumPy streams for instance generation, the
@@ -47,6 +81,12 @@ results. It also means an edit to a metric in the same module as an algorithm
 can invalidate the algorithm's run; separate modules make independent reuse
 possible. A long-running Python process retains imported modules, so restart or
 reload after editing already imported study code.
+
+Library fingerprints cover the implementation files in the new packages, rather
+than their compatibility facades. The architecture refactor therefore selects new
+simulation and analysis variants conservatively. Existing artifact schemas and
+readers are unchanged; retained results remain inspectable and analyzable with
+their matching saved configuration.
 
 Compatibility includes Python and numerical-library versions, platform identity,
 and resolved input paths. External dependencies that a study does not declare

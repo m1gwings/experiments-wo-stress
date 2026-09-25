@@ -8,11 +8,13 @@ import tempfile
 import unittest
 from copy import deepcopy
 from pathlib import Path
+from unittest.mock import patch
 
 import numpy as np
 import yaml
 
 from experiments_wo_stress import load_config, run_experiment
+from experiments_wo_stress.execution import provenance
 from experiments_wo_stress.storage import iter_completed_runs
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
@@ -162,6 +164,30 @@ class ExecutionTests(unittest.TestCase):
         source.write_text(original_source, encoding="utf-8")
         self.assertEqual(run_experiment(config, output).completed, 1)
         self.assertEqual(len(list((output / "runs").iterdir())), 2)
+
+    def test_moved_implementation_changes_select_new_retained_variants(self) -> None:
+        config = self.config(self.one_run())
+        output = self.root / "output"
+        self.assertEqual(run_experiment(config, output).completed, 1)
+        original_digest = provenance.digest_file
+        implementation_files = (
+            "execution/worker.py",
+            "components/contracts.py",
+            "storage/run.py",
+            "study/rng.py",
+        )
+        for relative_path in implementation_files:
+            with self.subTest(implementation=relative_path):
+
+                def changed_digest(path: Path) -> str:
+                    if path.as_posix().endswith("/" + relative_path):
+                        return "changed implementation"
+                    return original_digest(path)
+
+                with patch.object(provenance, "digest_file", side_effect=changed_digest):
+                    self.assertEqual(run_experiment(config, output).completed, 1)
+                self.assertEqual(run_experiment(config, output).skipped, 1)
+        self.assertEqual(len(list((output / "runs").iterdir())), 1 + len(implementation_files))
 
     def test_changed_csv_contents_select_new_variant(self) -> None:
         source = self.study / "input.csv"

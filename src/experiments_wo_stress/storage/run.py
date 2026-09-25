@@ -1,12 +1,8 @@
-"""Atomic local artifacts, explicit checkpoint encoding, and buffered numerical records."""
+"""Run checkpoints, validated result chunks, and bounded numerical recording."""
 
 from __future__ import annotations
 
-import hashlib
-import json
-import os
 import re
-import shutil
 import time
 import uuid
 from collections.abc import Iterator, Mapping
@@ -15,123 +11,17 @@ from typing import Any
 
 import numpy as np
 
-SCHEMA_VERSION = 1
-EXPERIMENT_SCHEMA_VERSION = 2
-
-
-class StorageError(RuntimeError):
-    """An artifact is incompatible, incomplete, or corrupt."""
-
-
-def digest_file(path: Path) -> str:
-    """Hash without loading an entire artifact into memory."""
-    digest = hashlib.sha256()
-    with path.open("rb") as stream:
-        for block in iter(lambda: stream.read(1024 * 1024), b""):
-            digest.update(block)
-    return digest.hexdigest()
-
-
-def fingerprint(value: Any) -> str:
-    encoded = json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
-    return hashlib.sha256(encoded.encode()).hexdigest()
-
-
-def _sync_directory(path: Path) -> None:
-    if os.name == "posix":
-        descriptor = os.open(path, os.O_RDONLY)
-        try:
-            os.fsync(descriptor)
-        finally:
-            os.close(descriptor)
-
-
-def atomic_text(path: Path, value: str) -> None:
-    """Publish text only after the replacement file is complete and synced."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    try:
-        with temporary.open("w", encoding="utf-8") as stream:
-            stream.write(value)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _sync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def atomic_json(path: Path, value: Any) -> None:
-    """Publish a complete, human-readable JSON artifact."""
-    atomic_text(path, json.dumps(value, indent=2, sort_keys=True, allow_nan=False) + "\n")
-
-
-def read_json(path: Path) -> Any:
-    try:
-        with path.open(encoding="utf-8") as stream:
-            return json.load(stream)
-    except (OSError, ValueError) as exc:
-        raise StorageError(f"Cannot read {path}: {exc}") from exc
-
-
-def write_arrays(path: Path, arrays: Mapping[str, np.ndarray], compression: bool = False) -> None:
-    path.parent.mkdir(parents=True, exist_ok=True)
-    temporary = path.with_name(f".{path.name}.{uuid.uuid4().hex}.tmp")
-    for name, array in arrays.items():
-        if np.asarray(array).dtype.kind not in "biufc":
-            raise TypeError(f"Array {name!r} must have a numerical dtype, not {array.dtype}")
-    try:
-        with temporary.open("wb") as stream:
-            writer = np.savez_compressed if compression else np.savez
-            writer(stream, **arrays)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, path)
-        _sync_directory(path.parent)
-    finally:
-        temporary.unlink(missing_ok=True)
-
-
-def _pack(value: Any, arrays: dict[str, np.ndarray]) -> Any:
-    if isinstance(value, np.ndarray):
-        name = f"a{len(arrays)}"
-        arrays[name] = value
-        return {"kind": "array", "name": name}
-    if isinstance(value, np.generic):
-        return _pack(value.item(), arrays)
-    if isinstance(value, Mapping):
-        if not all(isinstance(key, str) for key in value):
-            raise TypeError("Checkpoint dictionaries require string keys")
-        return {
-            "kind": "dict",
-            "items": [[key, _pack(item, arrays)] for key, item in value.items()],
-        }
-    if isinstance(value, (list, tuple)):
-        return {
-            "kind": "tuple" if isinstance(value, tuple) else "list",
-            "items": [_pack(item, arrays) for item in value],
-        }
-    if isinstance(value, float) and not np.isfinite(value):
-        return {"kind": "float", "value": str(value)}
-    if value is None or isinstance(value, (str, bool, int, float)):
-        return value
-    raise TypeError(f"Unsupported checkpoint value: {type(value).__name__}")
-
-
-def _unpack(value: Any, arrays: Mapping[str, np.ndarray]) -> Any:
-    if not isinstance(value, dict):
-        return value
-    kind = value["kind"]
-    if kind == "array":
-        return arrays[value["name"]]
-    if kind == "dict":
-        return {key: _unpack(item, arrays) for key, item in value["items"]}
-    if kind in ("list", "tuple"):
-        items = [_unpack(item, arrays) for item in value["items"]]
-        return tuple(items) if kind == "tuple" else items
-    if kind == "float":
-        return float(value["value"])
-    raise StorageError(f"Unknown checkpoint encoding: {kind!r}")
+from .files import (
+    SCHEMA_VERSION,
+    StorageError,
+    atomic_json,
+    digest_file,
+    pack_state,
+    read_json,
+    sync_directory,
+    unpack_state,
+    write_arrays,
+)
 
 
 def _chunk_path(directory: Path, filename: str) -> Path:
@@ -140,7 +30,9 @@ def _chunk_path(directory: Path, filename: str) -> Path:
     return directory / "results" / filename
 
 
-def _validated_chunks(directory: Path, manifest: dict[str, Any]) -> Iterator[dict[str, np.ndarray]]:
+def iter_validated_chunks(
+    directory: Path, manifest: dict[str, Any]
+) -> Iterator[dict[str, np.ndarray]]:
     """Read each numerical chunk once while validating its integrity and schema."""
     previous_step = 0
     schema = manifest["schema"]
@@ -171,14 +63,42 @@ def _validated_chunks(directory: Path, manifest: dict[str, Any]) -> Iterator[dic
 
 def validate_results(directory: Path, manifest: dict[str, Any]) -> None:
     """Validate committed chunks, their fixed schema, and strictly increasing steps."""
-    for _ in _validated_chunks(directory, manifest):
+    for _ in iter_validated_chunks(directory, manifest):
         pass
+
+
+def read_result_prefix(
+    directory: Path, manifest: dict[str, Any], completed_steps: int
+) -> tuple[dict[str, np.ndarray], list[dict[str, Any]]]:
+    """Load a completed prefix and identify exactly which committed rows it uses."""
+    maximum_rows = sum(entry["rows"] for entry in manifest["chunks"])
+    # Prefix requests allocate only their upper bound, not the entire longer run.
+    maximum_rows = min(maximum_rows, completed_steps)
+    records = {
+        key: np.empty((maximum_rows, *description["shape"]), dtype=description["dtype"])
+        for key, description in manifest["schema"].items()
+    }
+    offset = 0
+    prefix_chunks = []
+    for entry, arrays in zip(manifest["chunks"], iter_validated_chunks(directory, manifest)):
+        used_rows = int(np.searchsorted(arrays["step"], completed_steps, side="right"))
+        if used_rows:
+            prefix_chunks.append({**entry, "used_rows": used_rows})
+        for key, array in arrays.items():
+            records[key][offset : offset + used_rows] = array[:used_rows]
+        offset += used_rows
+        if used_rows < len(arrays["step"]) or offset == maximum_rows:
+            break
+    records = {key: values[:offset] for key, values in records.items()}
+    return records, prefix_chunks
 
 
 class RunStore:
     """One writer's view of a run directory and its committed generations."""
 
-    def __init__(self, directory: Path, *, compression: bool = False, keep_checkpoints: int = 2):
+    def __init__(
+        self, directory: Path, *, compression: bool = False, keep_checkpoints: int = 2
+    ) -> None:
         self.directory = Path(directory)
         self.compression = compression
         self.keep_checkpoints = keep_checkpoints
@@ -219,6 +139,7 @@ class RunStore:
         return result
 
     def completed(self) -> bool:
+        """Whether the latest state is completed and all of its records are valid."""
         if self.progress["status"] != "completed":
             return False
         validate_results(self.directory, self.progress["results"])
@@ -231,12 +152,12 @@ class RunStore:
         step = 0
         retained = []
         entries = list(self.progress.get("checkpoints", []))
-        endpoints = sorted(
+        completed_prefixes = sorted(
             self.progress.get("completed_budgets", {}).values(),
             key=lambda item: item["step"],
             reverse=True,
         )
-        entries.extend(item["checkpoint"] for item in endpoints if item.get("checkpoint"))
+        entries.extend(item["checkpoint"] for item in completed_prefixes if item.get("checkpoint"))
         for index, entry in enumerate(entries):
             generation = entry.get("generation", "")
             if not re.fullmatch(r"[a-f0-9]{32}", generation):
@@ -253,13 +174,14 @@ class RunStore:
                     continue
                 validate_results(self.directory, snapshot["results"])
                 with np.load(directory / "arrays.npz", allow_pickle=False) as arrays:
-                    state = _unpack(snapshot["state"], arrays)
+                    state = unpack_state(snapshot["state"], arrays)
                 manifest, step = snapshot["results"], snapshot["step"]
                 retained = entries[index : index + self.keep_checkpoints]
                 break
             except (StorageError, OSError, ValueError, KeyError):
                 continue
-        if endpoints and step < endpoints[0]["step"]:
+        # Falling back cannot discard observations already published as completed.
+        if completed_prefixes and step < completed_prefixes[0]["step"]:
             raise StorageError(
                 "No valid checkpoint covers the completed prefix; saved results were preserved"
             )
@@ -273,12 +195,13 @@ class RunStore:
     def checkpoint(
         self, state: dict[str, Any], manifest: dict[str, Any], step: int, *, status: str = "running"
     ) -> None:
+        """Publish state and records together before pruning old generations."""
         started = time.monotonic()
         generation = uuid.uuid4().hex
         directory = self.directory / "checkpoints" / generation
         directory.mkdir()
         arrays: dict[str, np.ndarray] = {}
-        packed = _pack(state, arrays)
+        packed = pack_state(state, arrays)
         write_arrays(directory / "arrays.npz", arrays, self.compression)
         atomic_json(
             directory / "state.json",
@@ -289,7 +212,7 @@ class RunStore:
                 "step": step,
             },
         )
-        _sync_directory(directory.parent)
+        sync_directory(directory.parent)
         entry = {
             "generation": generation,
             "state_sha256": digest_file(directory / "state.json"),
@@ -308,6 +231,8 @@ class RunStore:
         }
         atomic_json(self.progress_path, progress)
         self.progress = progress
+        # Publication comes first: failure here may leave extra generations, never
+        # remove the only checkpoint referenced by durable progress metadata.
         retained = {item["generation"] for item in checkpoints}
         retained.update(
             item["checkpoint"]["generation"]
@@ -321,6 +246,7 @@ class RunStore:
                 obsolete.rmdir()
 
     def finish(self, manifest: dict[str, Any], step: int) -> None:
+        """Pin a completed prefix and its checkpoint for later reads or extension."""
         completed = dict(self.progress.get("completed_budgets", {}))
         completed[str(step)] = {
             "step": step,
@@ -339,6 +265,7 @@ class RunStore:
         (self.directory / "failure.json").unlink(missing_ok=True)
 
     def fail(self, error: str, traceback: str) -> None:
+        """Record a failure while retaining every previously committed checkpoint."""
         atomic_json(self.directory / "failure.json", {"error": error, "traceback": traceback})
         self.progress["status"] = "failed"
         atomic_json(self.progress_path, self.progress)
@@ -347,7 +274,9 @@ class RunStore:
 class Recorder:
     """Buffer fixed-schema numerical columns with a configurable memory target."""
 
-    def __init__(self, store: RunStore, options: Mapping[str, Any], manifest: dict[str, Any]):
+    def __init__(
+        self, store: RunStore, options: Mapping[str, Any], manifest: dict[str, Any]
+    ) -> None:
         self.store = store
         self.every_steps = options.get("every_steps", 1)
         self.fields = options.get("fields")
@@ -360,6 +289,7 @@ class Recorder:
         self.maximum_rows = 0
 
     def record(self, step: int, observations: Mapping[str, Any], *, final: bool = False) -> None:
+        """Append selected observations at the requested interval or final step."""
         if step % self.every_steps and not final:
             return
         if "step" in observations:
@@ -401,6 +331,7 @@ class Recorder:
             self.flush()
 
     def flush(self) -> None:
+        """Write the buffered rows as the next immutable numerical chunk."""
         if not self.count:
             return
         filename = f"{len(self.chunks):06d}.npz"
@@ -415,156 +346,5 @@ class Recorder:
 
     @property
     def manifest(self) -> dict[str, Any]:
+        """Describe flushed chunks and their schema, excluding buffered observations."""
         return {"chunks": list(self.chunks), "schema": self.schema.copy()}
-
-
-def _instance_fingerprint(descriptor: dict[str, Any], arrays: Mapping[str, np.ndarray]) -> str:
-    digest = hashlib.sha256(fingerprint(descriptor).encode())
-    for name, value in sorted(arrays.items()):
-        array = np.ascontiguousarray(value)
-        digest.update(
-            fingerprint({"name": name, "shape": array.shape, "dtype": array.dtype.str}).encode()
-        )
-        raw = memoryview(array.reshape(-1)).cast("B")
-        for offset in range(0, len(raw), 1024 * 1024):
-            digest.update(raw[offset : offset + 1024 * 1024])
-    return digest.hexdigest()
-
-
-def save_instance(root: Path, instance: Any, *, compression: bool = False) -> str:
-    """Deduplicate immutable scientific instances by metadata and numerical contents."""
-    descriptor = instance.to_dict()
-    arrays = descriptor.pop("arrays")
-    instance_id = _instance_fingerprint(descriptor, arrays)
-    directory = root / "instances" / instance_id
-    if directory.exists():
-        load_instance(root, instance_id)
-        return instance_id
-    temporary = root / "instances" / f".{instance_id}.{uuid.uuid4().hex}.tmp"
-    temporary.mkdir(parents=True)
-    try:
-        write_arrays(temporary / "arrays.npz", arrays, compression)
-        atomic_json(
-            temporary / "metadata.json",
-            {
-                **descriptor,
-                "id": instance_id,
-                "arrays_sha256": digest_file(temporary / "arrays.npz"),
-            },
-        )
-        try:
-            os.rename(temporary, directory)
-            _sync_directory(directory.parent)
-        except OSError:
-            if not directory.is_dir():
-                raise
-            load_instance(root, instance_id)
-    finally:
-        if temporary.exists():
-            shutil.rmtree(temporary)
-    return instance_id
-
-
-def load_instance(root: Path, instance_id: str) -> Any:
-    """Load persisted scientific data without importing the simulator that created it."""
-    from .artifacts import Instance
-
-    if not re.fullmatch(r"[a-f0-9]{64}", instance_id):
-        raise StorageError("Invalid instance identifier")
-    directory = root / "instances" / instance_id
-    descriptor = read_json(directory / "metadata.json")
-    if descriptor.pop("id") != instance_id or digest_file(
-        directory / "arrays.npz"
-    ) != descriptor.pop("arrays_sha256"):
-        raise StorageError(f"Corrupt instance {instance_id}")
-    with np.load(directory / "arrays.npz", allow_pickle=False) as arrays:
-        descriptor["arrays"] = {name: arrays[name] for name in arrays.files}
-    if (
-        _instance_fingerprint(
-            {key: value for key, value in descriptor.items() if key != "arrays"},
-            descriptor["arrays"],
-        )
-        != instance_id
-    ):
-        raise StorageError(f"Instance contents do not match identity {instance_id}")
-    return Instance.from_dict(descriptor)
-
-
-def iter_completed_runs(output_dir: str | Path) -> Iterator[tuple[Any, Any]]:
-    """Yield requested completed prefixes as RunResults, loading one run at a time."""
-    from .artifacts import Instance, RunResult
-    from .jobs import RunSpec
-
-    root = Path(output_dir)
-    metadata = read_json(root / "metadata.json")
-    version = metadata.get("schema_version")
-    if version not in (SCHEMA_VERSION, EXPERIMENT_SCHEMA_VERSION):
-        raise StorageError("Unsupported experiment artifact schema")
-    for run_id in sorted(metadata["run_ids"]):
-        if not re.fullmatch(r"[a-f0-9]{20,64}", run_id):
-            raise StorageError("Invalid run identifier")
-        directory = root / "runs" / run_id
-        if not (directory / "progress.json").exists():
-            continue
-        run_metadata = read_json(directory / "metadata.json")
-        spec = RunSpec.from_dict(metadata.get("requests", {}).get(run_id, run_metadata["spec"]))
-        if version == SCHEMA_VERSION:
-            if spec.run_id != run_id:
-                raise StorageError(f"Run identity mismatch: {directory}")
-            for key in ("simulation_fingerprint", "implementation_fingerprint"):
-                if key in metadata and run_metadata.get(key) != metadata[key]:
-                    raise StorageError(f"Run provenance mismatch: {directory}")
-        elif run_metadata["spec"]["run_id"] != spec.run_id:
-            raise StorageError(f"Run identity mismatch: {directory}")
-        store = RunStore(directory)
-        target = getattr(spec, "budget_steps", None)
-        completion = store.completion(target, validate=False)
-        if completion is None:
-            continue
-        manifest = completion["results"]
-        completed_steps = completion["step"] if target is None else target
-        total = sum(entry["rows"] for entry in manifest["chunks"])
-        # Prefix requests allocate only their upper bound, not the entire longer run.
-        total = min(total, completed_steps)
-        results = {
-            key: np.empty((total, *description["shape"]), dtype=description["dtype"])
-            for key, description in manifest["schema"].items()
-        }
-        offset = 0
-        prefix_chunks = []
-        for entry, arrays in zip(manifest["chunks"], _validated_chunks(directory, manifest)):
-            count = int(np.searchsorted(arrays["step"], completed_steps, side="right"))
-            if count:
-                prefix_chunks.append({**entry, "used_rows": count})
-            for key, array in arrays.items():
-                results[key][offset : offset + count] = array[:count]
-            offset += count
-            if count < len(arrays["step"]) or offset == total:
-                break
-        results = {key: values[:offset] for key, values in results.items()}
-        instance_id = run_metadata.get("instance_id")
-        instance = load_instance(root, instance_id) if instance_id else Instance()
-        revision = fingerprint(
-            {
-                "chunks": prefix_chunks,
-                "instance": instance_id,
-                "steps": completed_steps,
-                "schema": manifest["schema"],
-            }
-        )
-        final_outputs = (
-            {key: values[-1] for key, values in results.items() if key != "step"}
-            if completed_steps == 1
-            else {}
-        )
-        yield (
-            spec,
-            RunResult(
-                records=results,
-                instance=instance,
-                spec=spec,
-                completed_steps=completed_steps,
-                revision=revision,
-                final_outputs=final_outputs,
-            ),
-        )

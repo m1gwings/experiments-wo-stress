@@ -47,7 +47,7 @@ class StorageTests(unittest.TestCase):
                 raise OSError("injected publication failure")
             atomic_json(path, value)
 
-        with patch("experiments_wo_stress.storage.atomic_json", side_effect=interrupted):
+        with patch("experiments_wo_stress.storage.run.atomic_json", side_effect=interrupted):
             with self.assertRaises(OSError):
                 store.checkpoint({"value": 2}, self.empty, 2)
         state, _, step = RunStore(self.path).restore()

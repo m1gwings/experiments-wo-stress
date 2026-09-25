@@ -92,7 +92,7 @@ class LifecycleTests(unittest.TestCase):
 
         with (
             patch.dict(os.environ, {"EWS_TEST_DISCORD": secret}),
-            patch("experiments_wo_stress.notifications.ExperimentNotifier._send", sent),
+            patch("experiments_wo_stress.execution.notifications.ExperimentNotifier._send", sent),
         ):
             # The new operational setting reuses both existing scientific runs.
             reused = run_experiment(enabled, self.output, workers=2)

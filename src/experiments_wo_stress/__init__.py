@@ -1,9 +1,9 @@
 """Reproducible numerical experiments with explicit state and independent analysis."""
 
-from .analysis import Summary, analyze
-from .artifacts import Instance, RunResult
-from .cleanup import clean_experiment
-from .components import (
+from .analysis.figures import plot
+from .analysis.metrics import Metric, MetricResult
+from .analysis.pipeline import Summary, analyze
+from .components.contracts import (
     DataGenerator,
     Feedback,
     InteractionProtocol,
@@ -11,11 +11,13 @@ from .components import (
     OnlineAlgorithm,
     StateMixin,
 )
-from .config import ExperimentConfig, load_config
-from .jobs import ComponentSpec, GridPlanner, RunPlanner, RunSpec, make_run_spec, plan_runs
-from .metrics import Metric, MetricResult
-from .plotting import plot
-from .runner import RunReport, inspect_experiment, run_experiment
+from .execution.coordinator import RunReport, run_experiment
+from .storage.cleanup import clean_experiment
+from .storage.experiment import inspect_experiment
+from .storage.models import Instance, RunResult
+from .study.config import ExperimentConfig, load_config
+from .study.planning import GridPlanner, RunPlanner, plan_runs
+from .study.specs import ComponentSpec, RunSpec, make_run_spec
 
 __version__ = "0.1.0"
 

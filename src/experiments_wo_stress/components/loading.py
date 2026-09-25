@@ -1,4 +1,4 @@
-"""Small structural interfaces and explicit resolution of project components."""
+"""Resolve configured components and inject their execution capabilities."""
 
 from __future__ import annotations
 
@@ -7,76 +7,14 @@ import importlib
 import inspect
 import logging
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field
-from typing import Any, Protocol, runtime_checkable
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
-from .artifacts import Instance
-from .jobs import ComponentSpec
+from ..storage.models import Instance
 
-
-@dataclass(frozen=True)
-class Feedback:
-    """Separate observable feedback from evaluator-only measurements."""
-
-    value: Any
-    measurements: Mapping[str, Any] = field(default_factory=dict)
-
-
-@runtime_checkable
-class Checkpointable(Protocol):
-    def state_dict(self) -> Mapping[str, Any]: ...
-
-    def load_state_dict(self, state: Mapping[str, Any]) -> None: ...
-
-
-class DataGenerator(Checkpointable, Protocol):
-    def generate(self, request: Any) -> Any: ...
-
-
-class OnlineAlgorithm(Checkpointable, Protocol):
-    def act(self, context: Any = None) -> Any: ...
-
-    def observe(self, action: Any, feedback: Any) -> None: ...
-
-
-class OfflineAlgorithm(Checkpointable, Protocol):
-    def fit(self, dataset: Any) -> Any: ...
-
-
-class InteractionProtocol(Checkpointable, Protocol):
-    step: int
-
-    def initialize(self, algorithm: Any, data: DataGenerator) -> None: ...
-
-    def advance(self, algorithm: Any, data: DataGenerator) -> Mapping[str, Any]: ...
-
-    def is_finished(self) -> bool: ...
-
-
-class StateMixin:
-    """Checkpoint implementation for components with no mutable scientific state.
-
-    Stateful subclasses must override both methods. RNG state is handled by the
-    executor and does not belong in these mappings.
-    """
-
-    def state_dict(self) -> dict[str, Any]:
-        return {}
-
-    def load_state_dict(self, state: Mapping[str, Any]) -> None:
-        if state:
-            raise ValueError(f"{type(self).__name__} expects empty checkpoint state")
-
-
-class NullAlgorithm(StateMixin):
-    """Placeholder for trial functions that do not need an algorithm object."""
-
-    supports_extension = True
-
-    def __init__(self, *, rng: np.random.Generator) -> None:
-        self.rng = rng
+if TYPE_CHECKING:
+    from ..study.specs import ComponentSpec
 
 
 _ALIASES = {
@@ -193,3 +131,21 @@ def validate_component(instance: Any, methods: Iterable[str]) -> None:
         raise TypeError(
             f"{type(instance).__name__} is missing required methods: {', '.join(missing)}"
         )
+
+
+def load_class(type_name: str, builtins: Mapping[str, type] | None = None) -> type:
+    """Load an analysis extension class, optionally using a local alias table."""
+    if not isinstance(type_name, str):
+        raise ValueError("Component type must be a string")
+    if builtins and type_name in builtins:
+        return builtins[type_name]
+    if ":" not in type_name:
+        raise ValueError(f"Unknown component {type_name!r}; use a built-in alias or module:Class")
+    module_name, class_name = type_name.split(":", 1)
+    try:
+        component_class = getattr(importlib.import_module(module_name), class_name)
+    except (ImportError, AttributeError) as exc:
+        raise ValueError(f"Cannot import component {type_name!r}: {exc}") from exc
+    if not isinstance(component_class, type):
+        raise TypeError(f"Component {type_name!r} must identify a class")
+    return component_class

@@ -139,7 +139,7 @@ class AnalysisCacheTests(unittest.TestCase):
         self.saved = result()
         atomic_json(self.root / "metadata.json", {"schema_version": 1, "run_ids": []})
         self.loader = mock.patch(
-            "experiments_wo_stress.storage.iter_completed_runs",
+            "experiments_wo_stress.storage.experiment.iter_completed_runs",
             side_effect=lambda _: iter([(self.saved.spec, self.saved)]),
         )
         self.loader.start()
@@ -199,7 +199,7 @@ class AnalysisCacheTests(unittest.TestCase):
         expected = path.read_bytes()
         path.write_text("changed export")
         with mock.patch(
-            "experiments_wo_stress.plotting._tikz", side_effect=AssertionError("rendered")
+            "experiments_wo_stress.analysis.figures._tikz", side_effect=AssertionError("rendered")
         ):
             self.assertEqual(plot(self.config(), self.root)[0].read_bytes(), expected)
 

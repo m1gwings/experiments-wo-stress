@@ -16,7 +16,7 @@ from unittest import mock
 import yaml
 
 from experiments_wo_stress.config import load_config
-from experiments_wo_stress.notifications import (
+from experiments_wo_stress.execution.notifications import (
     _MAX_PROGRESS_BYTES,
     ExperimentNotifier,
     _NoRedirect,
@@ -72,7 +72,7 @@ class _NotificationTest(unittest.TestCase):
     def setUp(self):
         self.opener = _Opener()
         patcher = mock.patch(
-            "experiments_wo_stress.notifications.urllib.request.build_opener",
+            "experiments_wo_stress.execution.notifications.urllib.request.build_opener",
             return_value=self.opener,
         )
         self.build_opener = patcher.start()
@@ -102,7 +102,7 @@ class NotificationConfigurationTests(_NotificationTest):
         notifier = self.notifier()
         with mock.patch.object(threading.Thread, "start", side_effect=RuntimeError(_URL)):
             with self.assertLogs(
-                "experiments_wo_stress.notifications", level="WARNING"
+                "experiments_wo_stress.execution.notifications", level="WARNING"
             ) as captured:
                 notifier.start()
         notifier.finish({"completed": 3})
@@ -160,7 +160,9 @@ class NotificationConfigurationTests(_NotificationTest):
         self.build_opener.assert_not_called()
 
     def test_empty_query_is_not_passed_to_strict_parser(self):
-        with mock.patch("experiments_wo_stress.notifications.urllib.parse.parse_qs") as parse:
+        with mock.patch(
+            "experiments_wo_stress.execution.notifications.urllib.parse.parse_qs"
+        ) as parse:
             self.assertEqual(_webhook_url(_URL), _URL + "?wait=true")
             parse.assert_not_called()
 
@@ -220,9 +222,9 @@ class NotificationTransportTests(_NotificationTest):
         error = urllib.error.HTTPError(_URL, 429, "limited", {"Retry-After": "1.5"}, body)
         self.opener.effect = mock.Mock(side_effect=[error, None])
         with mock.patch(
-            "experiments_wo_stress.notifications.time.monotonic", return_value=100
+            "experiments_wo_stress.execution.notifications.time.monotonic", return_value=100
         ) as clock:
-            with self.assertLogs("experiments_wo_stress.notifications", level="WARNING"):
+            with self.assertLogs("experiments_wo_stress.execution.notifications", level="WARNING"):
                 notifier._send("first")
             self.assertEqual(notifier._next_allowed, 102.75)
             clock.return_value = 102.5
@@ -238,7 +240,7 @@ class NotificationTransportTests(_NotificationTest):
         notifier = self.notifier()
         self.opener.headers = {"X-RateLimit-Remaining": "0", "X-RateLimit-Reset-After": "0.75"}
         with mock.patch(
-            "experiments_wo_stress.notifications.time.monotonic", return_value=100
+            "experiments_wo_stress.execution.notifications.time.monotonic", return_value=100
         ) as clock:
             notifier._send("first")
             self.assertEqual(notifier._next_allowed, 100.75)
@@ -255,9 +257,11 @@ class NotificationTransportTests(_NotificationTest):
         self.opener.effect = mock.Mock(
             side_effect=urllib.error.HTTPError(_URL, 429, _URL, {"Retry-After": "NaN"}, body)
         )
-        with mock.patch("experiments_wo_stress.notifications.time.monotonic", return_value=100):
+        with mock.patch(
+            "experiments_wo_stress.execution.notifications.time.monotonic", return_value=100
+        ):
             with self.assertLogs(
-                "experiments_wo_stress.notifications", level="WARNING"
+                "experiments_wo_stress.execution.notifications", level="WARNING"
             ) as captured:
                 notifier._send("status")
         self.assertEqual(body.read_sizes, [65536])
@@ -274,7 +278,9 @@ class NotificationTransportTests(_NotificationTest):
             before = len(self.opener.calls)
             with (
                 self.subTest(status=status),
-                self.assertLogs("experiments_wo_stress.notifications", level="WARNING") as captured,
+                self.assertLogs(
+                    "experiments_wo_stress.execution.notifications", level="WARNING"
+                ) as captured,
             ):
                 notifier._send("first")
                 notifier._send("second")
@@ -294,7 +300,9 @@ class NotificationTransportTests(_NotificationTest):
             self.opener.effect = mock.Mock(side_effect=error)
             with (
                 self.subTest(error=type(error).__name__),
-                self.assertLogs("experiments_wo_stress.notifications", level="WARNING") as captured,
+                self.assertLogs(
+                    "experiments_wo_stress.execution.notifications", level="WARNING"
+                ) as captured,
             ):
                 notifier._send("status")
             self.assertTrue(notifier.enabled)
@@ -323,7 +331,7 @@ class NotificationProgressTests(_NotificationTest):
         body = _TrackedBody(b" " * (_MAX_PROGRESS_BYTES + 2))
         with (
             mock.patch.object(Path, "open", return_value=body),
-            mock.patch("experiments_wo_stress.notifications.json.loads") as parse,
+            mock.patch("experiments_wo_stress.execution.notifications.json.loads") as parse,
         ):
             self.assertIsNone(ExperimentNotifier._durable_step(directory))
             parse.assert_not_called()
@@ -394,7 +402,7 @@ class NotificationProgressTests(_NotificationTest):
             notifier.run_finished(("first", "completed", None))
             self.assertLess(time.monotonic() - started, 0.2)
             started = time.monotonic()
-            with self.assertLogs("experiments_wo_stress.notifications", level="WARNING"):
+            with self.assertLogs("experiments_wo_stress.execution.notifications", level="WARNING"):
                 notifier.finish({"completed": 1, "pending": 2})
             self.assertLess(time.monotonic() - started, 0.8)
             self.assertTrue(notifier._cancelled.is_set())
@@ -414,7 +422,9 @@ class NotificationProgressTests(_NotificationTest):
         # The send callback runs just before response headers are processed.
         # Holding this test's loop under the notifier lock would change behavior;
         # completion itself joins the sender and establishes the final result.
-        with self.assertLogs("experiments_wo_stress.notifications", level="WARNING") as captured:
+        with self.assertLogs(
+            "experiments_wo_stress.execution.notifications", level="WARNING"
+        ) as captured:
             notifier.finish({"completed": 3})
         self.assertFalse(notifier._thread.is_alive())
         self.assertEqual(len(self.opener.calls), 1)

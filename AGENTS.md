@@ -13,12 +13,13 @@ contract, with real-paper validation still needed before declaring it stable.
 ## Repository structure
 
 - `src/experiments_wo_stress/`: package and `ews` CLI.
-  - `config.py`, `jobs.py`, `rng.py`: validated YAML, run planning, stable random streams.
-  - `components.py`, `protocols.py`, `data.py`: extension contracts and built-in helpers.
-  - `artifacts.py`, `settings.py`: saved instances/results and reusable environments.
-  - `runner.py`, `storage.py`: local execution, buffering, checkpoints, recovery.
-  - `logging.py`, `notifications.py`, `cleanup.py`: diagnostics, Discord summaries, cleanup.
-  - `metrics.py`, `analysis.py`, `plotting.py`: analysis independent of simulation.
+  - `study/`: configuration, run descriptions, planning, and stable random streams.
+  - `components/`: extension contracts and component loading.
+  - `builtins/`: supplied protocols, data generators, bandits, and Gymnasium adapter.
+  - `execution/`: coordination, run sessions, provenance, logs, and notifications.
+  - `storage/`: artifact models, experiment ownership, checkpoints, and cleanup.
+  - `analysis/`: metrics, aggregation, caches, and figures.
+  - Legacy top-level modules re-export public names; internal imports use their owners.
 - `examples/sequential_study/`: repeated Gaussian bandit study with custom components.
 - `examples/offline_csv/`: stored-data example.
 - `tests/`: configuration, execution, persistence, analysis, and CLI checks.

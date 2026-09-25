@@ -7,9 +7,10 @@ import json
 import sys
 from pathlib import Path
 
-from .config import load_config
-from .jobs import plan_runs
-from .runner import inspect_experiment, run_experiment
+from .execution.coordinator import run_experiment
+from .storage.experiment import inspect_experiment
+from .study.config import load_config
+from .study.planning import plan_runs
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -54,7 +55,7 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
     try:
         if args.command == "clean":
-            from .cleanup import clean_experiment
+            from .storage.cleanup import clean_experiment
 
             result = clean_experiment(
                 args.output, scope=args.scope, run_ids=args.run_id, yes=args.yes
@@ -79,23 +80,23 @@ def main(argv: list[str] | None = None) -> int:
                     report.failed or report.paused or report.pending
                 ):
                     if config.analysis.get("figures"):
-                        from .plotting import plot
+                        from .analysis.figures import plot
 
                         result["figures"] = [str(path) for path in plot(config, args.output)]
                     elif config.analysis.get("metrics"):
-                        from .analysis import analyze
+                        from .analysis.pipeline import analyze
 
                         result["groups"] = len(analyze(config, args.output))
                 print(json.dumps(result, indent=2))
                 interrupted = report.pending or (report.paused and args.max_steps is None)
                 return 1 if report.failed else (130 if interrupted else 0)
             elif args.command == "analyze":
-                from .analysis import analyze
+                from .analysis.pipeline import analyze
 
                 summaries = analyze(config, args.output)
                 result = {"groups": len(summaries), "output": str(args.output / "analysis")}
             else:
-                from .plotting import plot
+                from .analysis.figures import plot
 
                 result = {"figures": [str(path) for path in plot(config, args.output)]}
         print(json.dumps(result, indent=2))
