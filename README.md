@@ -26,6 +26,9 @@ explicit seeding of each component, *etc.*.
   figures.
 - **Operational tools.** Count and inspect runs from the CLI, receive optional
   Discord progress messages, and use the same workflow on a Linux VM.
+- **Automatic compute reports.** On Linux and macOS, retain machine resources,
+  invocation timings, and execution-attempt history for a paper's computational
+  resources section, without changing scientific identities or reuse.
 
 ## Install
 
@@ -129,6 +132,22 @@ ews inspect outputs/bandits
 The [offline CSV example](examples/offline_csv/README.md) uses a stored dataset
 and performs one estimator fit per run.
 
+Each `ews run` on Linux or macOS writes an aggregate report to
+`OUTPUT/compute/summary.md`, with exact records in JSON. It distinguishes
+end-to-end elapsed time, cumulative worker time, process CPU time, and allocated
+GPU time, and retains failed and paused attempts. Reused runs consume no new
+simulation compute; older results without timing remain unknown. `run` prints a
+concise summary to stderr while retaining JSON on stdout; `inspect` points to
+the saved report.
+
+Hardware collection is best effort and needs no extra dependency or YAML.
+Windows execution continues without compute reporting. The report covers only
+records retained in this output directory, not the whole research project.
+Researchers must disclose additional compute from other directories, deleted
+records, machines, and tools themselves. See
+[automatic compute reporting](docs/CONFIGURATION.md#automatic-compute-reporting)
+for measurement definitions and an illustrative report.
+
 Ordinary CPU experiments require no GPU configuration. For GPU study components,
 assign one GPU to each worker:
 
@@ -220,7 +239,9 @@ if __name__ == "__main__":
 ```
 
 The main guard is needed for multiple CPU workers and for any GPU execution,
-including one GPU worker.
+including one GPU worker. `run_experiment` automatically records its execution
+invocation on supported systems; separate Python analysis or plotting calls are
+outside that invocation's timings.
 
 ## Commands
 

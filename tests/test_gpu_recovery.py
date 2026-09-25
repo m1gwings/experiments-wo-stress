@@ -17,6 +17,7 @@ from pathlib import Path
 import numpy as np
 import yaml
 
+from experiments_wo_stress.execution.compute_environment import supported
 from experiments_wo_stress.storage import iter_completed_runs
 
 COMPONENTS = '''"""Slow deterministic science with an optional one-time process crash."""
@@ -265,6 +266,13 @@ class GPURecoveryTests(unittest.TestCase):
         self.assertEqual(second["report"]["failed"], 0, second["report"])
         self.assertEqual(second["report"]["completed"], 4, second["report"])
         self.assertEqual(first["variants"], second["variants"])
+        if supported():
+            compute = json.loads((recovered / "compute/summary.json").read_text())
+            self.assertEqual(compute["totals"]["invocation_count"], 2)
+            self.assertEqual(compute["totals"]["unresolved_attempt_count"], 1)
+            self.assertEqual(compute["totals"]["gpu_attempts_without_wall_timing"], 1)
+            self.assertEqual(compute["totals"]["attempt_count"], 6)
+            self.assertEqual(compute["totals"]["timed_attempt_count"], 5)
         for attempt in (first, second):
             self.assertTrue(attempt["environment_unchanged"])
             self.assertEqual(attempt["children"], [])

@@ -10,6 +10,7 @@ from typing import TYPE_CHECKING, Any
 import numpy as np
 
 from ..components.loading import load_class
+from ..execution.compatibility import implementation_digest
 from ..storage.files import atomic_json, digest_file, fingerprint, read_json
 from ..study.specs import canonical_json
 from .cache import AnalysisCache, cache_identity, safe_name, source_identity
@@ -113,6 +114,22 @@ def plot(config: ExperimentConfig, output_dir: str | Path) -> list[Path]:
     if not isinstance(figures, list):
         raise ValueError("analysis.figures must be a list")
     summaries = analyze(config, output_dir)
+    return export_figures(config, output_dir, summaries)
+
+
+def export_figures(
+    config: ExperimentConfig, output_dir: str | Path, summaries: list[Summary]
+) -> list[Path]:
+    """Export figures from summaries already analyzed for this config and output.
+
+    CLI composition uses this internal boundary to time analysis and plotting
+    separately without reading saved numerical arrays twice. The caller must
+    first finish ``analyze`` for the same configuration and output directory;
+    its current aggregate cache identity remains the source of figure identity.
+    """
+    figures = config.analysis.get("figures", [])
+    if not isinstance(figures, list):
+        raise ValueError("analysis.figures must be a list")
     cache = AnalysisCache(output_dir)
     output = cache.figures_dir
     output.mkdir(parents=True, exist_ok=True)
@@ -123,7 +140,9 @@ def plot(config: ExperimentConfig, output_dir: str | Path) -> list[Path]:
     cache_keys = []
     for figure, selected, name in prepared:
         plotter = None
-        implementation = {"exporter": digest_file(Path(__file__))}
+        implementation = {
+            "exporter": implementation_digest("analysis/figures.py", digest_file(Path(__file__)))
+        }
         if figure.get("type", "line") != "line":
             params = figure.get("params", {})
             if not isinstance(params, dict):

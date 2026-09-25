@@ -46,7 +46,7 @@ Most implementation lives in six packages under
 | [`study`](../src/experiments_wo_stress/study/) | Validated configuration, concrete run descriptions, planning, and deterministic random streams. | `ExperimentConfig`, `ComponentSpec`, `RunSpec`, `GridPlanner`, `make_rngs`. |
 | [`components`](../src/experiments_wo_stress/components/) | Interfaces for study code and the loading of configured classes. | `Feedback`, `InteractionProtocol`, `construct`, `create_instance`. |
 | [`builtins`](../src/experiments_wo_stress/builtins/) | Supplied protocols, data generators, environments, and bandit metrics. | `OnlineProtocol`, `CSVDataGenerator`, `StationaryBandit`, `PseudoRegretMetric`. |
-| [`execution`](../src/experiments_wo_stress/execution/) | One invocation's scheduling, GPU allocation, and each run's component lifecycle. | `ExecutionCoordinator`, `PreparedRequest`, `RunSession`, `RunReport`. |
+| [`execution`](../src/experiments_wo_stress/execution/) | One invocation's scheduling, GPU allocation, compute reporting, and each run's component lifecycle. | `ExecutionCoordinator`, `PreparedRequest`, `RunSession`, `RunReport`. |
 | [`storage`](../src/experiments_wo_stress/storage/) | Saved instances, result records, checkpoint representations, publication, validation, and cleanup. | `Instance`, `RunResult`, `ExperimentStore`, `RunStore`, `CheckpointBackend`, `Recorder`. |
 | [`analysis`](../src/experiments_wo_stress/analysis/) | The metric interface, aggregation, derived caches, and figure export. | `MetricResult`, `Summary`, `AnalysisCache`, `analyze`, `plot`. |
 
@@ -65,10 +65,10 @@ while counting is an optional inspection step:
 | Command | Internal route |
 | --- | --- |
 | `count-runs` | `load_config` and `plan_runs`, returning only `name` and `runs`. No execution or output directory is needed. |
-| `run` | `_run_study` in `cli.py` calls `run_experiment`, then `plot` for configured figures or `analyze` for metrics after all requested work completes or is reused. Failed, paused, or pending runs prevent this analysis stage; without analysis configuration it performs execution only. |
+| `run` | `_run_study` in `cli.py` starts compute observation, calls `run_experiment`, then `analyze` and configured `export_figures` after all requested work completes or is reused. Failed, paused, or pending runs prevent analysis; without analysis configuration it performs execution only. |
 | `analyze` | `analysis/pipeline.py:analyze`, reading saved numerical results and reusing valid metric and aggregate caches. |
 | `plot` | `analysis/figures.py:plot`, computing or reusing analysis and exporting configured figures from saved data. |
-| `inspect` | `storage/experiment.py:inspect_experiment`, reporting saved progress and validating completed runs. |
+| `inspect` | `storage/experiment.py:inspect_experiment`, reporting saved progress and validating completed runs; the CLI also points to the compute summary. |
 | `clean` | `storage/cleanup.py:clean_experiment`, previewing or applying selected artifact removal. |
 
 `count-runs` is never required before `run`. For grid groups, run count is the
@@ -144,6 +144,60 @@ Source fingerprints cover file contents. Editing a comment or docstring in a
 tracked simulation module can therefore select a fresh stored variant; editing
 metric source can invalidate its derived cache. This conservative behavior is
 useful to remember when inspecting changes that only improve readability.
+The narrow exception for introducing compute hooks is an exact-digest mapping
+in `execution/compatibility.py`; unrecognized execution-source changes retain the
+conservative behavior. Standalone reporting modules are outside these identities.
+The same bridge preserves figure caches for the reviewed export-boundary refactor.
+
+### Follow automatic compute reporting
+
+Compute reporting observes lifecycle boundaries without owning scheduling or
+scientific state. Follow these files in order:
+
+1. `_run_study` in [`cli.py`](../src/experiments_wo_stress/cli.py) starts the
+   invocation before execution. It times analysis and plotting separately and
+   finalizes the report on success or failure. It passes analyzed summaries to
+   `export_figures`, avoiding a second analysis pass. The JSON result stays on stdout; a
+   concise resource summary goes to stderr.
+2. [`execution/compute.py`](../src/experiments_wo_stress/execution/compute.py)
+   supplies invocation state and the decorators on `ExecutionCoordinator.run`
+   and `execute_run`. The coordinator decorator measures execution and creates
+   an execution-only invocation when the Python API is used directly. The worker
+   decorator brackets setup/restoration, execution, checkpointing, and cleanup.
+   Reused completion checks contribute no new simulation attempt compute.
+3. [`execution/compute_environment.py`](../src/experiments_wo_stress/execution/compute_environment.py)
+   collects Linux/macOS platform, CPU, RAM, filesystem, and optional accelerator
+   information. System-query failures leave fields unavailable; Windows skips
+   reporting. Hardware inspection never imports a GPU framework or queries cloud
+   metadata services.
+4. Compare worker observation with the fixed leases in
+   [`execution/resources.py`](../src/experiments_wo_stress/execution/resources.py).
+   The current worker assignment supplies allocated GPU count. Elapsed attempt
+   time × count gives allocated GPU-seconds, not sampled utilization. Process
+   CPU user/system deltas include process threads, exclude descendants, and are
+   distinct from cumulative elapsed worker time.
+5. [`execution/compute_report.py`](../src/experiments_wo_stress/execution/compute_report.py)
+   publishes unique immutable records under `compute/invocations/` and
+   `compute/attempts/`, using the existing atomic file utilities. A start record
+   without a finish preserves evidence of an unresolved attempt with unknown
+   duration. Resuming adds an attempt instead of overwriting one.
+6. Continue through aggregation in that report module to `compute/summary.json`
+   and `compute/summary.md`. These replaceable summaries combine known attempts,
+   distinguish completed from failed/paused compute, count missing historical
+   timing, and summarize attempt durations by group/algorithm. Artifact size is
+   scanned once during finalization. A successful resumed attempt is only part
+   of a scientific run, so attempt statistics are labelled accordingly.
+7. Return to `collect_provenance` and `prepare_request` in
+   [`execution/provenance.py`](../src/experiments_wo_stress/execution/provenance.py),
+   then [`execution/compatibility.py`](../src/experiments_wo_stress/execution/compatibility.py).
+   Compute records never enter run IDs, RNGs, variant identities, or analysis
+   cache keys. Exact reviewed reporting-only edits retain earlier execution and
+   figure-export fingerprints; other implementation edits still invalidate conservatively.
+
+The report scopes every total to records in this output directory. Missing
+history remains unknown, and the researcher must account for other project
+compute. Measurement definitions are in
+[automatic compute reporting](CONFIGURATION.md#automatic-compute-reporting).
 
 ### 3. Execute one complete interaction step
 
@@ -316,7 +370,9 @@ Each `Summary` holds coordinates, mean, uncertainty, labels, and repetition coun
 [`analysis/cache.py`](../src/experiments_wo_stress/analysis/cache.py) contains
 `AnalysisCache`, which validates and publishes derived generations.
 [`analysis/figures.py`](../src/experiments_wo_stress/analysis/figures.py) turns
-summaries into Matplotlib or TikZ output, or calls a custom plotter. Reading saved
+summaries into Matplotlib or TikZ output, or calls a custom plotter. Its public
+`plot` entry point analyzes results, then calls the internal `export_figures`
+boundary that the CLI uses for a separately timed plotting stage. Reading saved
 results and producing standard figures does not require constructing the study's
 simulation components.
 
@@ -332,6 +388,7 @@ simulation components.
 | Component lookup and injected arguments | `resolve_type`, `constructor_kwargs`, and `construct` in [components/loading.py](../src/experiments_wo_stress/components/loading.py). |
 | Per-run logging and resource cleanup | [execution/logging.py](../src/experiments_wo_stress/execution/logging.py) and `RunSession.close` in [execution/worker.py](../src/experiments_wo_stress/execution/worker.py). |
 | Fixed GPU visibility and spawned-worker lifetime | [execution/resources.py](../src/experiments_wo_stress/execution/resources.py), then GPU scheduling in [execution/coordinator.py](../src/experiments_wo_stress/execution/coordinator.py). |
+| Compute lifecycle, hardware observations, and historical summaries | [execution/compute.py](../src/experiments_wo_stress/execution/compute.py), [execution/compute_environment.py](../src/experiments_wo_stress/execution/compute_environment.py), and [execution/compute_report.py](../src/experiments_wo_stress/execution/compute_report.py). |
 | Checkpoint representation and saved-backend loading | `CheckpointBackend` and `NumPyCheckpointBackend` in [storage/checkpoints.py](../src/experiments_wo_stress/storage/checkpoints.py), then generation transactions in [storage/run.py](../src/experiments_wo_stress/storage/run.py). |
 | Optional progress messages and retry rules | `ExperimentNotifier` in [execution/notifications.py](../src/experiments_wo_stress/execution/notifications.py). Delivery is coordinated outside worker steps. |
 
@@ -358,6 +415,9 @@ the interaction visible; temporary directories isolate persisted artifacts.
 | [test_execution.py](../tests/test_execution.py) | Worker-independent results, pause/resume, retained variants, and recovery after failures. |
 | [test_gpu_execution.py](../tests/test_gpu_execution.py) | GPU visibility before study imports, distinct and persistent worker assignments, single-GPU spawning, stable science, and cleanup without requiring CUDA. |
 | [test_gpu_recovery.py](../tests/test_gpu_recovery.py) | Real SIGTERM handling with bounded GPU scheduling, exact resume, and process cleanup after an abrupt worker exit. |
+| [test_compute_environment.py](../tests/test_compute_environment.py) | Mocked Linux/macOS hardware and filesystem queries, missing utilities, Windows omission, and artifact-size semantics without real GPUs. |
+| [test_compute.py](../tests/test_compute.py) | Deterministic invocation and attempt clocks, resume/reuse history, allocated GPU time, identity independence, and reporting failures. |
+| [test_compute_report.py](../tests/test_compute_report.py) | Immutable checked records, aggregation across invocations, unresolved/old timing, grouped summaries, and report rendering. |
 | [test_lifecycle.py](../tests/test_lifecycle.py) | Repeated invocations, cleanup, continuation, logging, and source compatibility. |
 | [test_storage.py](../tests/test_storage.py) | Instance persistence, state encoding, checkpoint publication, fallback, and result schemas. |
 | [test_checkpoint_backends.py](../tests/test_checkpoint_backends.py) | Custom checkpoint representations, complete state and RNG replay, backend changes, multiple payload files, corruption, and publication failures. |
@@ -391,7 +451,8 @@ Follow the owner of the behavior you are changing. A new learning rule belongs i
 the study's algorithm code; a new scientific score belongs in a study metric. A
 new reusable interaction order starts at the protocol contract. Changes to
 worker scheduling belong in the coordinator and GPU process allocation belongs
-in execution resources. Checkpoint timing belongs in the run session, representation
+in execution resources. Compute observation and reporting belong in the compute
+modules, independently of those allocations. Checkpoint timing belongs in the run session, representation
 in a checkpoint backend, and durable publication and recovery in the store. A
 plotting change starts from `Summary` and the figure exporter.
 

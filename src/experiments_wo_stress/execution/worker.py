@@ -16,6 +16,7 @@ from ..storage.files import StorageError, atomic_json, read_json
 from ..storage.run import Recorder, RunStore
 from ..study.rng import make_rngs
 from ..study.specs import RunSpec
+from .compute import observe_attempt
 from .logging import run_logging
 
 _WORKER_STOP_EVENT: Any = None
@@ -185,6 +186,7 @@ class RunSession:
                     self.logger.exception("Component cleanup failed")
 
 
+@observe_attempt
 def execute_run(
     spec_dict: dict[str, Any],
     root: str,

@@ -42,7 +42,7 @@ The source tree follows six responsibilities:
 | `study/` | Validated configuration, serializable run specifications, planning, and RNG derivation. `specs.py` keeps saved descriptions independent of component loading. |
 | `components/` | Extension contracts and dynamic loading. External study code implements these interfaces. |
 | `builtins/` | Library-supplied protocols, generators, bandit environments, bandit metrics, and the optional Gymnasium adapter. |
-| `execution/` | Request coordination, GPU allocation and worker lifecycle, provenance, logging, and notifications. |
+| `execution/` | Request coordination, GPU allocation and worker lifecycle, compute observation/reporting, provenance, logging, and notifications. |
 | `storage/` | Immutable artifact models, atomic files, checkpoint representations and transactions, experiment state, and cleanup. |
 | `analysis/` | General metric contracts and field metrics, repeated-run aggregation, validated caches, and figure export. |
 
@@ -125,7 +125,7 @@ reload after editing already imported study code.
 GPU IDs and actual worker assignments are execution diagnostics, retained in
 resolved configuration, provenance, and run logs. They do not enter scientific
 run IDs, RNG derivation, or stored variant selection. EWS manages resource
-visibility only, without importing a GPU framework or detecting hardware. The
+visibility without importing a GPU framework or requiring hardware detection. The
 study remains responsible for framework RNGs, supported checkpoint state, and
 numerical reproducibility across hardware; identical EWS streams do not imply
 bitwise-identical GPU computations.
@@ -143,6 +143,15 @@ than their compatibility facades. The architecture refactor therefore selects ne
 simulation and analysis variants conservatively. Existing artifact schemas and
 readers are unchanged; retained results remain inspectable and analyzable with
 their matching saved configuration.
+
+Compute metadata never enters these identities. Reporting modules are excluded
+from simulation fingerprints, and reporting does not change analysis cache
+inputs. `execution/compatibility.py` maps exact, reviewed reporting-only versions
+of the coordinator, worker, provenance, and figure-export files to their preceding
+digests. This narrow compatibility bridge preserves existing scientific variants
+and figure caches when instrumentation is introduced. An unrecognized source
+digest still invalidates reuse conservatively; it is not a general exemption for
+implementation edits.
 
 Compatibility includes Python and numerical-library versions, platform identity,
 and resolved input paths. External dependencies that a study does not declare
@@ -197,6 +206,12 @@ output/
   analysis/
     cache/                        metric, aggregate, and figure caches
     figures/                      current exports
+  compute/
+    invocations/<uuid>.json       immutable finished invocation records
+    attempts/<uuid>.start.json    immutable attempt start records
+    attempts/<uuid>.json          immutable finished attempt records
+    summary.json                  regenerated aggregate data
+    summary.md                    concise human-readable report
 ```
 
 The public storage readers validate and expose selected results; exact filenames
@@ -258,6 +273,65 @@ directories, and task submission is bounded. Failures retain inspectable error
 information; per-run logs rotate. The live output filesystem needs process
 locking and atomic replacement, which an object-store URL does not supply.
 
+## Compute observation and reporting
+
+Resource ownership stays in `execution/resources.py`. Observation belongs to
+`execution/compute.py`, hardware queries to `execution/compute_environment.py`,
+and durable compute records and aggregation to `execution/compute_report.py`.
+These modules do not interpret scientific observations or modify checkpoints.
+
+The CLI starts an invocation before execution and closes it after configured
+analysis and plotting, including failure paths. A decorator on
+`ExecutionCoordinator.run` measures the execution stage and supplies an
+execution-only invocation for direct Python API calls. The CLI measures analysis
+before passing its summaries to the internal `export_figures` boundary, so
+plotting does not repeat analysis. The public `plot` API still performs both.
+Invocation records retain UTC timestamps, elapsed stage durations, worker count,
+machine information, and completed/reused/paused/failed/pending counts.
+
+A decorator on `execute_run` brackets each worker call, including restoration,
+initialization, checkpoint publication, and component cleanup. Its process CPU
+user/system deltas use `resource.getrusage(RUSAGE_SELF)`: threads in that process
+contribute, descendants do not. Reused worker processes are measured by deltas,
+not lifetime totals. Unrelated threads can contribute in an embedded application
+using the single in-process worker. No process-lifetime peak RSS is presented as
+an individual run's peak; memory reporting is machine RAM capacity only.
+
+Each attempt references its scientific run, stored variant, group, algorithm,
+and invocation. A reused completion contributes no new simulation compute.
+GPU assignments come from the worker's existing fixed resource allocation;
+attempt elapsed seconds multiplied by allocated GPU count gives GPU-seconds.
+This excludes utilization claims and is not a measurement of the worker's idle
+GPU reservation between attempts. Worker time sums elapsed attempt durations;
+it differs both from end-to-end elapsed time and from CPU process time. EWS does
+not claim CPU-core-hours because it does not allocate CPU cores to workers.
+
+Starts and completed records have unique IDs and are published atomically in
+the separate compute tree. A forced worker or coordinator exit can leave a
+start without a finish; its duration remains unknown. Normal failure, pause,
+and resume preserve separate attempt records. Aggregation keeps completed
+attempts, failed/paused work, and missing history distinguishable. Timing
+statistics summarize attempts, so a successful resumed attempt need not describe
+the cost of the complete scientific run. Older artifacts without recorded timing
+remain unknown. Immutable records are retained across invocations; summaries
+are replaceable views of the observed history.
+
+Hardware collection is best effort on Linux/macOS, with unsupported Windows
+reporting omitted silently. Small bounded system queries can provide NVIDIA
+model/VRAM/driver or Apple chip information without framework imports. Unknown
+fields stay unavailable. No username, hostname, home-directory name, or network
+address is needed in the hardware report. Existing scientific provenance remains
+unchanged. Filesystem capacity and availability are start snapshots. One
+finalization scan sums regular-file lengths without following symlinks before
+publishing the new report; this is logical artifact size, not allocated blocks.
+Reporting failures are logged and cannot invalidate completed scientific results.
+
+The human report helps researchers write a computational-resources paragraph,
+but describes only records known in this output directory. Its totals may omit
+unrecorded or deleted history and are not a whole-project compute estimate.
+Researchers must disclose external experiments and other machines themselves.
+See [measurement definitions and an example](CONFIGURATION.md#automatic-compute-reporting).
+
 ## Analysis and cache invalidation
 
 Metrics operate on recorded observations and saved instances. A metric requiring
@@ -301,7 +375,8 @@ checkpoints leaves numerical observations but loses continuation state. Analysis
 and plotting do not hold the execution lock, so cleanup should run while those
 operations are idle. The
 [configuration guide](CONFIGURATION.md#run-inspect-and-clean) lists cleanup
-scopes.
+scopes. Compute records survive selective run cleanup, including records of
+removed variants; the `all` scope removes them together with other artifacts.
 
 Artifact schema 2 supports retained variants and budget continuation. Supported
 analysis of legacy schema 1 artifacts remains available, but execution requires

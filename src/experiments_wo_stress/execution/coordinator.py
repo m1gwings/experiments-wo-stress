@@ -19,6 +19,7 @@ from ..storage.experiment import ExperimentStore
 from ..study.config import ExperimentConfig, load_config, validate_gpu_workers
 from ..study.planning import plan_runs
 from ..study.specs import RunSpec
+from .compute import observe_execution
 from .notifications import ExperimentNotifier
 from .provenance import PreparedRequest, collect_provenance, preflight, prepare_request
 from .resources import GPUWorker, gpu_workers, validate_gpu_environment, wait_gpu_workers
@@ -97,6 +98,7 @@ class ExecutionCoordinator:
         self.locations: dict[str, str] = {}
         self.notifier: ExperimentNotifier | None = None
 
+    @observe_execution
     def run(self) -> RunReport:
         """Prepare a durable request, execute it, and close invocation resources."""
         source_dir = str(self.config.source_dir)

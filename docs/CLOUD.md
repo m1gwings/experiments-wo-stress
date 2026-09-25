@@ -176,7 +176,7 @@ for its lifetime; the algorithm uses its local device, normally `cuda:0`. This
 also applies with one GPU and one worker. Any `--workers` override must match the
 number of IDs.
 
-EWS manages visibility only: it does not install a framework, discover GPU
+EWS manages visibility: it does not install a framework, validate GPU
 availability, or reserve devices against another experiment. Allocate disjoint
 GPUs to concurrent invocations. Memory packing, multiple workers sharing a GPU,
 multi-GPU training, and distributed scheduling are outside this mode. See
@@ -203,6 +203,36 @@ Changing GPU assignment alone does not select a new scientific run or stored
 variant. It remains visible in execution diagnostics, but does not guarantee
 bitwise reproducibility across GPU models or framework versions. Check framework
 state conversion and RNG restoration in the study's own continuation tests.
+
+## Retain compute reports with the artifacts
+
+On Linux/macOS, `ews run` automatically records compute information in
+`OUTPUT/compute/`. Keep this directory with the rest of the output mount and
+backups. `summary.md` is a concise starting point for a paper's resources
+paragraph; immutable JSON records retain invocation and attempt history.
+`ews inspect OUTPUT` points to the latest summary. Missing hardware queries or
+reporting failures do not make successful scientific execution fail.
+
+The report includes the platform, available CPU/RAM/GPU capacity information,
+worker count, output-filesystem capacity/available space at start, and logical
+artifact bytes at finalization. A VM or container may expose host capacities
+rather than its usable quota. EWS does not query cloud metadata services or infer
+a provider, instance SKU, billing rate, or tenancy. Record the provider, machine
+type, configured limits, and storage arrangement separately in the paper.
+
+End-to-end elapsed time includes configured analysis/plotting. Cumulative worker
+time adds the elapsed durations of attempts; allocated GPU-hours multiply each
+attempt's wall time by its assigned GPU count. Neither is CPU-core-hours or
+measured accelerator utilization. Process CPU time excludes descendants.
+Failed/paused attempts remain visible across retries, reused completions add no
+new simulation compute, and missing historical or abruptly terminated timings
+remain unknown. See the
+[measurement definitions](CONFIGURATION.md#automatic-compute-reporting).
+
+These totals cover only records retained in this output directory. They cannot
+describe experiments in other directories, deleted records, other machines, or
+tools outside EWS, and do not include a VM's idle reservation between invocations.
+The researcher remains responsible for disclosing broader project compute.
 
 ## Optional progress messages
 

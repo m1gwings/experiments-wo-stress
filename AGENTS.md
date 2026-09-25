@@ -16,7 +16,7 @@ contract, with real-paper validation still needed before declaring it stable.
   - `study/`: configuration, run descriptions, planning, and stable random streams.
   - `components/`: extension contracts and component loading.
   - `builtins/`: supplied protocols, data generators, bandits, bandit metrics, and Gymnasium adapter.
-  - `execution/`: coordination, GPU resources, run sessions, provenance, logs, and notifications.
+  - `execution/`: coordination, GPU resources, compute reporting, run sessions, provenance, logs, and notifications.
   - `storage/`: artifact models, experiment ownership, checkpoint backends, and cleanup.
   - `analysis/`: metrics, aggregation, caches, and figures.
   - Legacy top-level modules re-export public names; internal imports use their owners.
@@ -96,6 +96,16 @@ contract, with real-paper validation still needed before declaring it stable.
 - Keep notification transport outside workers and protocol steps. Notifications
   must not change scientific identities or expose webhook credentials in artifacts
   or errors; test delivery with mocked transports rather than real messages.
+- Keep compute observation separate from resource allocation and scientific state.
+  Reporting is best effort on Linux/macOS and silently unavailable on Windows.
+  Preserve invocation and attempt history outside result chunks and checkpoints;
+  distinguish elapsed worker time, process CPU time, and allocated GPU time.
+  Reuse consumes no new simulation compute; missing historical timing stays unknown.
+  Reporting metadata and reporting-only edits must not change scientific or cache
+  identities. Exact compatibility mappings require review; unknown execution-source
+  edits must continue to invalidate conservatively. Test clocks and system queries
+  without requiring particular hardware. Reports cover observed output-directory
+  history, never the entire research project's compute.
 - Keep generated results, caches, environments, and build artifacts out of commits.
   Do not choose a license or publish a release without an explicit request.
 

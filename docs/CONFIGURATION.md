@@ -313,6 +313,88 @@ reserve GPUs against other processes or experiments. GPU memory packing,
 fractional GPUs, multiple workers per GPU, multi-GPU training, and distributed
 scheduling are outside this execution mode.
 
+### Automatic compute reporting
+
+On Linux and macOS, each `ews run` automatically records resources and timing
+under `OUTPUT/compute/`. No YAML setting or additional dependency is required.
+Windows runs silently omit reporting. Missing hardware fields stay unavailable;
+reporting failures are logged without turning successful scientific execution
+into failure.
+
+`compute/summary.md` is a starting point for a computational-resources or
+reproducibility paragraph. `summary.json` holds machine-readable aggregates;
+immutable invocation and attempt records preserve the underlying history. The
+CLI prints a short resource summary to stderr, keeps its result JSON on stdout,
+and includes the report location. `ews inspect OUTPUT` also points to a saved
+summary. Separate `ews analyze` and `ews plot` commands do not create run
+invocation records. The Python `run_experiment` API records execution only;
+subsequent analysis calls are outside that invocation.
+
+Environment records include the OS/kernel, architecture, CPU model, reliable
+physical and logical CPU counts, total machine RAM, effective worker count, and
+output-filesystem capacity and available bytes at invocation start. Hardware
+capacity is not a promise about an allocated VM/container quota or memory used
+by a run. GPU reporting follows EWS's existing assignments and collects model,
+VRAM, and driver information when reliable system queries allow it. Physical
+IDs remain in JSON for diagnostics. NVIDIA hardware inventory is labelled
+separately: `nvidia-smi` indices need not match CUDA device ordering, so discovered
+models are not silently assigned to configured IDs. Apple chip information is best effort;
+discovering an accelerator does not mean EWS knows it was used. No framework
+is imported for inspection, and no cloud metadata service is queried.
+
+Interpret the timing fields separately:
+
+| Measurement | Meaning |
+| --- | --- |
+| Invocation wall time | Elapsed time through execution and configured analysis/plotting, with UTC start/finish timestamps. Execution, analysis, and plotting durations are also recorded separately. |
+| Worker time | Sum of elapsed execution-attempt durations, including initialization/restoration, checkpointing, and component cleanup. Concurrent attempts add together: four workers active for one hour contribute about four worker-hours. |
+| CPU user/system time | Differences of process `resource.getrusage(RUSAGE_SELF)` counters around each attempt, including its process threads and excluding child processes. In an embedded single-worker application, unrelated threads in the same process can contribute. |
+| GPU time | Attempt wall time multiplied by the number of GPUs assigned by EWS. This is allocated accelerator time, not measured utilization; CPU-only execution contributes zero. |
+
+Worker-hours and process CPU-hours are not CPU-core-hours. No continuous
+utilization or memory sampling is performed, and the report does not claim an
+individual run's peak memory. With configured figures, `run` measures analysis
+first, then plots from those summaries without repeating analysis. Omitted
+stages have no duration.
+
+Resuming a run adds a new attempt; it never overwrites its earlier paused or
+failed attempt. Reusing a valid completion adds no simulation attempt compute.
+Aggregates distinguish completed attempts from failed/paused work and summarize
+attempt durations by group and algorithm. A resumed run's final successful
+attempt is only its remaining work, so these attempt statistics are not a
+full-run benchmark. Older completions without records and abruptly terminated
+attempts without a finish record have unknown timing. Totals are observed
+amounts, potentially lower bounds, rather than invented estimates for gaps.
+
+Output size is measured once during finalization, before publishing the new
+report, by summing regular-file lengths without following symlinks. It includes
+retained variants and analysis artifacts; it is not allocated filesystem blocks.
+The figure can include earlier compute reports and excludes the newly published
+report's bytes. Filesystem availability is a start snapshot, not peak disk use.
+
+An illustrative report excerpt might read:
+
+```text
+Compute environment
+Platform: Linux x86_64
+CPU cores: 16 physical / 32 logical; RAM: 64 GiB
+GPU: 1 × NVIDIA RTX 4090, 24 GiB; Workers: 1
+
+Observed experiment compute
+Completed runs with timing: 120; timing unavailable: 0
+Invocation wall time: 1h 14m
+Cumulative worker time: 1.2 worker-hours
+Cumulative allocated GPU time: 1.2 GPU-hours
+Failed/paused attempt time: 1m
+Attempt timing: count 122 / median 34s / mean 35s / min 12s / max 80s
+```
+
+The report covers only compute records retained in this output directory. It
+does not measure the whole research project: other directories, deleted compute
+records, other machines, external tools, and unobserved exploration remain the
+researcher's responsibility to disclose. Hardware and timing metadata do not
+change scientific run IDs, RNG streams, stored variants, or analysis cache keys.
+
 ### Checkpoint backends
 
 Ordinary NumPy studies need no checkpoint backend configuration. The built-in
@@ -591,6 +673,9 @@ Cleanup requires `--yes` to delete the previewed selection.
 
 `--run-id` also restricts checkpoint cleanup. Run cleanup includes newly unreferenced
 instances and request records that refer to removed variants.
+Compute history survives `runs` and `inactive` cleanup, so it may still describe
+attempts whose scientific artifacts were removed. The `all` scope removes that
+history too. Aggregate files describe their last regeneration.
 
 Review the preview before applying deletion. Keep datasets, scientific source,
 configurations, and generated outputs in distinct locations so cleanup scope is

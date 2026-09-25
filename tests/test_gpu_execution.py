@@ -21,6 +21,7 @@ import numpy as np
 import yaml
 
 from experiments_wo_stress import load_config, run_experiment
+from experiments_wo_stress.execution.compute_environment import supported
 from experiments_wo_stress.storage import iter_completed_runs
 
 COMPONENTS = '''"""Inspect process visibility without importing a GPU framework."""
@@ -123,6 +124,14 @@ class GPUExecutionTests(unittest.TestCase):
         """Read recorded worker observations from validated completed results."""
         return {spec.run_id: result for spec, result in iter_completed_runs(output)}
 
+    def attempts(self, output):
+        """Read terminal observations while excluding their immutable start records."""
+        return [
+            json.loads(path.read_text())
+            for path in (output / "compute" / "attempts").glob("*.json")
+            if not path.name.endswith(".start.json")
+        ]
+
     def test_cpu_single_worker_retains_coordinator_and_inherited_visibility(self):
         os.environ["CUDA_VISIBLE_DEVICES"] = "12"
         config = self.configuration()
@@ -133,6 +142,14 @@ class GPUExecutionTests(unittest.TestCase):
         self.assertEqual(result["pid"][0], os.getpid())
         self.assertEqual(result["gpu"][0], 12)
         self.assertEqual(os.environ["CUDA_VISIBLE_DEVICES"], "12")
+        if supported():
+            (attempt,) = self.attempts(output)
+            self.assertEqual(attempt["status"], "completed")
+            self.assertEqual(attempt["allocated_gpu_count"], 0)
+            self.assertEqual(attempt["gpu_ids"], [])
+            self.assertEqual(attempt["gpu_seconds"], 0)
+            summary = json.loads((output / "compute" / "summary.json").read_text())
+            self.assertEqual(summary["totals"]["gpu_seconds"], 0)
 
     def test_one_gpu_spawns_before_import_and_logs_its_assignment(self):
         config = self.configuration([7], planner=f"{self.module}:BoundPlanner")
@@ -155,6 +172,16 @@ class GPUExecutionTests(unittest.TestCase):
         self.assertEqual(resolved["execution"]["gpu_ids"], [7])
         log = next(output.glob("runs/*/run.log")).read_text()
         self.assertIn("CUDA_VISIBLE_DEVICES=7 local_device=cuda:0", log)
+        if supported():
+            (attempt,) = self.attempts(output)
+            self.assertEqual(attempt["status"], "completed")
+            self.assertEqual(attempt["allocated_gpu_count"], 1)
+            self.assertEqual(attempt["gpu_ids"], [7])
+            self.assertGreaterEqual(attempt["wall_seconds"], 0)
+            self.assertEqual(attempt["gpu_seconds"], attempt["wall_seconds"])
+            summary = json.loads((output / "compute" / "summary.json").read_text())
+            self.assertEqual(summary["totals"]["gpu_seconds"], attempt["wall_seconds"])
+            self.assertEqual(summary["totals"]["gpu_hours"], attempt["wall_seconds"] / 3600)
 
     def test_workers_keep_distinct_assignments_across_runs(self):
         config = self.configuration([3, 8], repetitions=8, peers=2)

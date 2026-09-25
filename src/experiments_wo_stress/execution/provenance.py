@@ -20,6 +20,7 @@ from ..storage.files import EXPERIMENT_SCHEMA_VERSION, SCHEMA_VERSION, digest_fi
 from ..study.config import ExperimentConfig
 from ..study.planning import plan_runs
 from ..study.specs import ComponentSpec, RunSpec
+from .compatibility import implementation_digest
 
 
 def preflight(specs: list[RunSpec]) -> dict[str, str]:
@@ -107,7 +108,10 @@ def collect_provenance(config: ExperimentConfig, sources: dict[str, str]) -> dic
         "storage/run.py",
         "storage/experiment.py",
     )
-    implementation = {name: digest_file(package / name) for name in simulation_modules}
+    implementation = {
+        name: implementation_digest(name, digest_file(package / name))
+        for name in simulation_modules
+    }
     project = Path(config.source_dir)
     for group in config.runs:
         if group.get("planner", "grid") != "grid":

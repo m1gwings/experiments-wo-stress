@@ -8,6 +8,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .execution.compute import Invocation
 from .execution.coordinator import run_experiment
 from .storage.experiment import inspect_experiment
 from .study.config import ExperimentConfig, load_config
@@ -22,20 +23,36 @@ def _run_study(
     max_steps: int | None,
 ) -> tuple[dict[str, Any], int]:
     """Execute the request, then derive its configured outputs only after completion."""
-    report = run_experiment(config, output, workers=workers, max_steps=max_steps)
-    result = report.to_dict()
-    # A completed subset must not stand in for the whole requested study. An
-    # intentional --max-steps pause succeeds, but still defers analysis and figures.
-    if not (report.failed or report.paused or report.pending):
-        if config.analysis.get("figures"):
-            from .analysis.figures import plot
+    invocation = Invocation(
+        output,
+        config.execution["workers"] if workers is None else workers,
+        config.execution.get("gpu_ids"),
+    )
+    try:
+        with invocation:
+            report = run_experiment(config, output, workers=workers, max_steps=max_steps)
+            result = report.to_dict()
+            # A completed subset must not stand in for the whole requested study.
+            # An intentional pause succeeds but defers analysis and figures.
+            if not (report.failed or report.paused or report.pending):
+                if config.analysis.get("metrics") or config.analysis.get("figures"):
+                    from .analysis.pipeline import analyze
 
-            # Plotting already computes or reuses the analysis it needs.
-            result["figures"] = [str(path) for path in plot(config, output)]
-        elif config.analysis.get("metrics"):
-            from .analysis.pipeline import analyze
+                    with invocation.stage("analysis"):
+                        summaries = analyze(config, output)
+                    if not config.analysis.get("figures"):
+                        result["groups"] = len(summaries)
+                if config.analysis.get("figures"):
+                    from .analysis.figures import export_figures
 
-            result["groups"] = len(analyze(config, output))
+                    with invocation.stage("plotting"):
+                        result["figures"] = [
+                            str(path) for path in export_figures(config, output, summaries)
+                        ]
+    finally:
+        compute = invocation.display_summary(sys.stderr)
+    if compute:
+        result["compute"] = compute
     interrupted = report.pending or (report.paused and max_steps is None)
     exit_code = 1 if report.failed else (130 if interrupted else 0)
     return result, exit_code
@@ -123,6 +140,9 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "inspect":
             result = inspect_experiment(args.output)
+            compute_path = args.output / "compute" / "summary.md"
+            if compute_path.is_file():
+                result["compute_report"] = str(compute_path)
         else:
             config = load_config(args.config)
             if args.command == "count-runs":

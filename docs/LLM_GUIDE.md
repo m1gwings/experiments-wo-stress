@@ -454,10 +454,81 @@ GPU assignments are operational settings recorded in resolved configuration,
 provenance, and logs. They do not change scientific run IDs, injected RNG streams,
 or stored variant selection. The study must seed and checkpoint any framework
 RNGs; bitwise equality across different hardware or frameworks is not guaranteed.
-EWS has no GPU-framework dependency and does not check available hardware. Device
+EWS has no GPU-framework dependency and does not require hardware detection. Device
 exclusivity applies only to workers in one invocation; arrange disjoint devices
 for concurrent experiments. GPU memory packing, shared or fractional GPUs,
 multi-GPU training, and distributed scheduling are outside this mode.
+
+## Automatic compute reporting
+
+No additional YAML is needed. On Linux/macOS, `ews run` retains a compute report
+under `OUTPUT/compute/summary.md`, with machine-readable `summary.json` and
+immutable invocation/attempt records alongside it. `run` writes a concise
+resource summary to stderr and retains JSON on stdout, including the report
+location; `ews inspect OUTPUT` also points to the summary. Windows silently
+omits reporting. Collection is best effort: missing system utilities leave
+fields unavailable, and reporting errors do not invalidate scientific artifacts
+or turn successful execution into failure.
+
+The environment record includes OS/kernel, architecture, CPU model and reliable
+physical/logical counts, total machine RAM, worker count, filesystem capacity
+and available bytes at invocation start, and GPU model/VRAM/driver when reliable
+system queries provide them. NVIDIA inventory is distinct from allocation:
+`nvidia-smi` indices may differ from CUDA ordering, so model-to-assignment mapping
+is not assumed. Apple chip information is best effort. Capacity
+does not measure memory consumed by the study or guarantee a container's usable
+quota. EWS imports no framework to inspect hardware, records no unnecessary
+personal identifiers in this report, and queries no cloud metadata service.
+Record cloud provider, machine type, and quota details separately if relevant.
+
+An invocation records UTC start/finish timestamps, total elapsed time, separate
+execution/analysis/plotting durations, and completed/reused/paused/failed/pending
+counts. With figures configured, analysis is timed first; plotting consumes those
+summaries without repeating analysis. The public `plot` API still performs both
+operations. The Python `run_experiment`
+API records an execution-only invocation. Separate `analyze` and `plot` commands
+or Python calls are outside that invocation's timing.
+
+Interpret compute quantities as follows:
+
+- Worker time sums elapsed execution-attempt durations, including setup, restore,
+  checkpoints, and cleanup. Four concurrent workers active for one hour produce
+  roughly four worker-hours and one hour of elapsed time.
+- CPU user/system time is the per-attempt change in process
+  `resource.getrusage(RUSAGE_SELF)`. It includes process threads, excludes child
+  processes, and can include unrelated threads when an embedding application
+  uses the in-process single worker. It is not elapsed worker time or an allocated
+  CPU-core-hour measurement.
+- GPU-seconds are attempt elapsed seconds × GPUs allocated by EWS. This measures
+  allocated accelerator time during attempts, not GPU utilization or idle device
+  reservations between attempts. CPU-only execution contributes zero.
+- Memory reporting is machine RAM capacity. EWS does not continuously sample
+  memory or claim a process-lifetime RSS peak is a run's peak.
+- Artifact bytes sum regular-file lengths once at finalization without following
+  symlinks, before publishing the new report. This includes retained artifacts
+  and earlier report files; it is not allocated filesystem blocks or peak disk use.
+
+Each actual attempt has a scientific run ID, stored variant ID, group/algorithm,
+status, and timing. Pause/resume adds attempts. Reusing a valid completion adds
+no new simulation compute. Aggregates distinguish completed attempts from
+failed/paused work and give count/mean/median/min/max attempt statistics, including
+group/algorithm summaries. A resumed successful attempt measures only the
+remaining work, not the complete scientific run. Old artifacts without timing
+and forced exits without a finish record remain unknown; observed totals may
+therefore be lower bounds. Selective run cleanup retains compute history;
+`clean --scope all --yes` removes it.
+
+For example, an illustrative resources paragraph could use a report showing
+120 timed runs, 1h 14m elapsed time, 4.6 worker-hours, 0 allocated GPU-hours,
+and 8m in failed/paused attempts on a 16-physical/32-logical-core machine with
+64 GiB RAM. Use the actual report's measurements, not these example numbers.
+Compute metadata does not change run IDs, injected random streams, simulation
+reuse, or analysis cache identities.
+
+The report covers only compute records retained under this output directory,
+not the entire research project. The researcher must separately disclose compute
+from other directories, deleted records, other machines, and tools outside EWS,
+including exploration beyond the final reported experiments.
 
 ## Metrics, figures, and custom planning
 
