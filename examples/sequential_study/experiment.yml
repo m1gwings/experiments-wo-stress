@@ -38,6 +38,7 @@ recording:
   buffer_bytes: 16777216
 
 analysis:
+  points: 100
   metrics:
     - name: regret
       type: pseudo_regret

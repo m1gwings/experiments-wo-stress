@@ -1,6 +1,6 @@
-"""Preserve scientific compatibility for the reviewed compute-only integration.
+"""Preserve scientific compatibility for the reviewed compute and terminal observation hooks.
 
-Only the exact integration revisions below inherit their preceding source
+Only the exact observation revisions below inherit their preceding source
 digest. Any further edit falls back to its real digest, so scientific execution
 changes still invalidate reuse. Reporting modules themselves are operational and
 are not part of the simulation fingerprint inventory.
@@ -8,16 +8,16 @@ are not part of the simulation fingerprint inventory.
 
 from __future__ import annotations
 
-# Reviewed edits: observational decorators and this digest bridge, no scientific
-# state, scheduling, persistence, RNG, or result-format changes.
-_COMPUTE_ONLY_REVISIONS = {
+# Reviewed edits: observational decorators, progress transport, and this digest
+# bridge; no scientific state, scheduling, persistence, RNG, or result-format changes.
+_OBSERVATIONAL_REVISIONS = {
     "execution/coordinator.py": (
-        "49b941986835e89b727ae3656a05a50bda5b41515f7ba160f2a8807c1212be91",
+        "3953ebbb374ce6e8d0b1b4f0f3bdc1100eaef8816390f8b9950ba3308ffa475c",
         "415420bf9df2ddef783c3d07efb5ace788b13b25479607d6ae73b16fa3a89423",
     ),
-    "execution/worker.py": (
-        "9b48c02cee248d20d26e9fa48a03a1050c691b989042146f404c53a78cfd025c",
-        "ea7e261a9d4a948239622974ed951b46c56f1b47091a9a5069e13f86e2d9f52a",
+    "execution/resources.py": (
+        "0969b5c26b530ccec9dc414803f8ae3c6f52cbe8aafb6c9b6c9cc39befdb2602",
+        "c59620c438e444bf6bc21c60af190ace4433eee1d7a24f9d0a0c3335ca8e4d95",
     ),
     "execution/provenance.py": (
         "0e8d8277585b297f7f77986750daa7097b081f86fd1a0c97d9272a6b2d1ab451",
@@ -32,5 +32,5 @@ _COMPUTE_ONLY_REVISIONS = {
 
 def implementation_digest(name: str, digest: str) -> str:
     """Bridge exact reviewed operational edits; conservatively hash every other edit."""
-    reviewed = _COMPUTE_ONLY_REVISIONS.get(name)
+    reviewed = _OBSERVATIONAL_REVISIONS.get(name)
     return reviewed[1] if reviewed and digest == reviewed[0] else digest

@@ -60,6 +60,20 @@ class CheckpointStateTests(_StorageTestCase):
         replay.bit_generator.state = restored["rng"]
         np.testing.assert_array_equal(rng.random(10), replay.random(10))
 
+    def test_numpy_complex_and_extended_scalars_roundtrip(self) -> None:
+        """Numerical scalars without a lossless Python scalar retain their NumPy representation."""
+        values = [
+            np.complex64(1 + 2j),
+            np.complex128(3 - 4j),
+            np.longdouble("1.234567890123456789"),
+        ]
+        store = RunStore(self.path)
+        store.checkpoint({"values": values}, self.empty_manifest, 0)
+        restored, _, _ = RunStore(self.path).restore()
+        for expected, actual in zip(values, restored["values"]):
+            np.testing.assert_array_equal(actual, expected)
+            self.assertEqual(np.asarray(actual).dtype, expected.dtype)
+
 
 class CheckpointCommitTests(_StorageTestCase):
     """Publication and retention keep a previous valid checkpoint recoverable."""
@@ -128,6 +142,26 @@ class ResultRecordingTests(_StorageTestCase):
         with self.assertRaises(TypeError):
             recorder.record(2, {"value": object()})
         self.assertFalse((self.path / "progress.json").exists())
+
+    def test_npz_keyword_names_roundtrip_as_measurements_and_instance_arrays(self) -> None:
+        """Array names are scientific field names, not arguments to NumPy's exporter."""
+        values = {"file": np.array([1, 2], dtype=np.int16), "allow_pickle": np.array(3.5)}
+        for compression in (False, True):
+            with self.subTest(compression=compression):
+                root = self.path / str(compression)
+                store = RunStore(root / "run", compression=compression)
+                recorder = Recorder(store, {}, self.empty_manifest)
+                recorder.record(1, values)
+                recorder.flush()
+                with np.load(store.directory / "results/000000.npz", allow_pickle=False) as arrays:
+                    self.assertEqual(set(arrays.files), {*values, "step"})
+                    for name, expected in values.items():
+                        np.testing.assert_array_equal(arrays[name], expected[None])
+                        self.assertEqual(arrays[name].dtype, expected.dtype)
+                identifier = save_instance(root, Instance(arrays=values), compression=compression)
+                restored = load_instance(root, identifier)
+                for name, expected in values.items():
+                    np.testing.assert_array_equal(restored.arrays[name], expected)
 
 
 class InstancePersistenceTests(_StorageTestCase):

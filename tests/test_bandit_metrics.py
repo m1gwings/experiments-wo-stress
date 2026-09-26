@@ -62,6 +62,44 @@ class BanditMetricTests(unittest.TestCase):
                 PseudoRegretMetric(comparator=comparator).compute(saved).values, expected
             )
 
+    def test_regret_arithmetic_does_not_use_the_storage_dtype(self):
+        """Boolean and small integer rewards retain signed gaps and full cumulative sums."""
+        for dtype in (np.bool_, np.uint8, np.uint64, np.int8, np.float32):
+            for stationary in (False, True):
+                with self.subTest(dtype=dtype, stationary=stationary):
+                    matrix = np.array([[1, 0], [0, 1], [1, 0]], dtype=dtype)
+                    means = matrix[0] if stationary else matrix
+                    actions = np.array([0, 1, 0])
+                    saved = make_saved_result(
+                        means=means,
+                        records={"step": np.arange(1, 4), "action": actions},
+                    )
+                    for comparator, expected in (
+                        ("dynamic", [0, 1, 1] if stationary else [0, 0, 0]),
+                        ("best_fixed", [0, 1, 1] if stationary else [0, -1, -1]),
+                    ):
+                        np.testing.assert_array_equal(
+                            PseudoRegretMetric(comparator=comparator).compute(saved).values,
+                            expected,
+                        )
+                    realized = replace(
+                        saved,
+                        instance=Instance(arrays={"counterfactual_rewards": matrix}),
+                        records={**saved.records, "reward": matrix[np.arange(3), actions]},
+                    )
+                    np.testing.assert_array_equal(
+                        RealizedRegretMetric().compute(realized).values, [0, -1, -1]
+                    )
+        # Even signed integer subtraction can overflow before cumsum promotes it.
+        saved = make_saved_result(
+            means=np.array([[-100, 100]] * 3, dtype=np.int8),
+            records={"step": np.arange(1, 4), "action": np.zeros(3, dtype=int)},
+        )
+        for comparator in ("dynamic", "best_fixed"):
+            np.testing.assert_array_equal(
+                PseudoRegretMetric(comparator=comparator).compute(saved).values, [200, 400, 600]
+            )
+
     def test_realized_regret_requires_consistent_counterfactual_rewards(self):
         """Realized regret requires counterfactual rewards consistent with observed rewards."""
         with self.assertRaisesRegex(ValueError, "counterfactual_rewards"):

@@ -21,6 +21,7 @@ from ..study.planning import plan_runs
 from ..study.specs import RunSpec
 from .compute import observe_execution
 from .notifications import ExperimentNotifier
+from .progress import TerminalProgress
 from .provenance import PreparedRequest, collect_provenance, preflight, prepare_request
 from .resources import GPUWorker, gpu_workers, validate_gpu_environment, wait_gpu_workers
 from .worker import execute_run, initialize_worker
@@ -73,6 +74,7 @@ class ExecutionCoordinator:
         *,
         workers: int | None = None,
         max_steps: int | None = None,
+        progress: TerminalProgress | None = None,
     ) -> None:
         if max_steps is not None and (
             isinstance(max_steps, bool) or not isinstance(max_steps, int) or max_steps < 0
@@ -84,6 +86,7 @@ class ExecutionCoordinator:
         self.config = config
         self.workers = workers
         self.max_steps = max_steps
+        self.progress = progress
         self.execution = dict(config.execution)
         self.gpu_ids = validate_gpu_workers(self.execution, workers)
         if self.gpu_ids is not None:
@@ -107,6 +110,8 @@ class ExecutionCoordinator:
         if self.gpu_ids is not None:
             return self._run_with_gpus()
         self.plan = plan_runs(self.config)
+        if self.progress:
+            self.progress.configure(len(self.plan))
         self.notifier = ExperimentNotifier(
             self.config.notifications, self.config.name, len(self.plan)
         )
@@ -147,11 +152,18 @@ class ExecutionCoordinator:
         """Prepare and run science only in processes with lifetime GPU assignments."""
         with (
             self._signal_handlers(),
-            gpu_workers(self.gpu_ids, self.context, self.stop_event) as workers,
+            gpu_workers(
+                self.gpu_ids,
+                self.context,
+                self.stop_event,
+                self.progress.queue if self.progress else None,
+            ) as workers,
         ):
             # Planning, preflight, and variant selection can all import study code.
             # Do them in an assigned worker before constructing any run components.
             self.plan, provenance, prepared = workers[0].prepare(self.config)
+            if self.progress:
+                self.progress.configure(len(self.plan))
             provenance["execution"] = {
                 "workers": self.workers,
                 "gpu_ids": list(self.gpu_ids),
@@ -235,6 +247,8 @@ class ExecutionCoordinator:
         )
 
     def _run_started(self, spec: RunSpec) -> None:
+        if self.progress:
+            self.progress.run_started(spec)
         self.notifier.run_started(
             spec.run_id, self.store.runs_path / self.locations[spec.run_id], spec.budget_steps
         )
@@ -242,6 +256,8 @@ class ExecutionCoordinator:
     def _run_finished(self, result: tuple[str, str, str | None]) -> None:
         self.report.add(result)
         self.notifier.run_finished(result)
+        if self.progress:
+            self.progress.run_finished(result)
 
     def _run_sequentially(self) -> None:
         for index, spec in enumerate(self.plan):
@@ -249,7 +265,11 @@ class ExecutionCoordinator:
                 self.report.pending = len(self.plan) - index
                 break
             self._run_started(spec)
-            result = execute_run(*self._arguments(spec), stop_event=self.stop_event)
+            result = execute_run(
+                *self._arguments(spec),
+                stop_event=self.stop_event,
+                progress_queue=self.progress.queue if self.progress else None,
+            )
             self._run_finished(result)
 
     def _run_parallel(self) -> None:
@@ -257,7 +277,7 @@ class ExecutionCoordinator:
             max_workers=self.workers,
             mp_context=self.context,
             initializer=initialize_worker,
-            initargs=(self.stop_event,),
+            initargs=(self.stop_event, self.progress.queue if self.progress else None),
         ) as pool:
             remaining = iter(self.plan)
             active: dict[Future, str] = {}
@@ -295,8 +315,15 @@ def run_experiment(
     *,
     workers: int | None = None,
     max_steps: int | None = None,
+    progress: TerminalProgress | None = None,
 ) -> RunReport:
-    """Run or resume an experiment. ``max_steps`` pauses each run after new steps."""
+    """Run or resume a study; optionally observe it with an entered TerminalProgress.
+
+    ``max_steps`` pauses each run after new steps. Python calls are silent by
+    default; the CLI supplies a parent-owned terminal observer.
+    """
     if not isinstance(config, ExperimentConfig):
         config = load_config(config)
-    return ExecutionCoordinator(config, output_dir, workers=workers, max_steps=max_steps).run()
+    return ExecutionCoordinator(
+        config, output_dir, workers=workers, max_steps=max_steps, progress=progress
+    ).run()

@@ -6,7 +6,7 @@ import csv
 import hashlib
 import json
 from collections.abc import Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -16,6 +16,7 @@ from ..builtins.metrics import PseudoRegretMetric, RealizedRegretMetric
 from ..components.loading import load_class
 from ..storage import experiment as experiment_storage
 from ..storage.files import atomic_json, digest_file, fingerprint, read_json, write_arrays
+from ..study.config import analysis_points
 from ..study.planning import plan_runs
 from ..study.specs import RunSpec, canonical_json
 from . import metrics as metric_definitions
@@ -42,6 +43,8 @@ class Summary:
     coordinates ``x``; ``count`` is the number of distinct repetitions contributing
     at every point. ``uncertainty_kind`` names standard deviation, standard error,
     or no uncertainty, so table and figure consumers can interpret the values.
+    Analysis retains at most ``analysis.points`` coordinates after computing the
+    full curves and their statistics; null retains every coordinate.
     """
 
     metric: str
@@ -271,8 +274,11 @@ def analyze(config: ExperimentConfig, output_dir: str | Path) -> list[Summary]:
     Every cache identity includes upstream revisions. Metric changes never alter
     simulation artifacts. One complete RunResult is loaded at a time; aggregation
     reads cached curves rather than retaining every run's observations.
+    Metrics and statistics use every recorded point before ``analysis.points``
+    bounds the returned summaries, exported tables, and downstream figures.
     """
     output_dir = Path(output_dir)
+    points = analysis_points(config.analysis)
     _validate_analysis_selection(config, output_dir)
     metrics = _metric_specs(config.analysis)
     group_by, uncertainty_kind = _aggregation_options(config.analysis)
@@ -315,12 +321,15 @@ def analyze(config: ExperimentConfig, output_dir: str | Path) -> list[Summary]:
     aggregate_identity = cache_identity(
         "aggregate",
         implementation=digest_file(Path(__file__)),
-        options={"group_by": group_by, "uncertainty": uncertainty_kind},
+        options={"group_by": group_by, "uncertainty": uncertainty_kind, "points": points},
         metrics=[entry.identity() for entry in entries],
     )
 
     def write_aggregate(target: Path) -> None:
-        summaries = _aggregate_metrics(entries, uncertainty_kind)
+        summaries = [
+            _subsample_summary(summary, points)
+            for summary in _aggregate_metrics(entries, uncertainty_kind)
+        ]
         _write_tables(target, summaries, group_by)
 
     directory = cache.publish("aggregates", aggregate_identity, write_aggregate)
@@ -334,6 +343,21 @@ def analyze(config: ExperimentConfig, output_dir: str | Path) -> list[Summary]:
         {"aggregate_key": fingerprint(aggregate_identity), "completed_runs": completed},
     )
     return summaries
+
+
+def _subsample_summary(summary: Summary, points: int | None) -> Summary:
+    """Retain evenly spaced row positions and both endpoints after full analysis."""
+    if points is None or len(summary.x) <= points:
+        return summary
+    # With 2 <= points < length, rounded positions remain distinct. Index the
+    # original coordinates as well as values so sparse/custom axes stay intact.
+    indices = np.rint(np.linspace(0, len(summary.x) - 1, points)).astype(np.intp)
+    return replace(
+        summary,
+        x=summary.x[indices],
+        mean=summary.mean[indices],
+        uncertainty=summary.uncertainty[indices],
+    )
 
 
 def _write_tables(directory: Path, summaries: list[Summary], group_by: list[str]) -> None:

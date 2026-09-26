@@ -32,6 +32,15 @@ is clear. Write focused code with useful errors and public docstrings. Update
 affected documentation and examples in the same change, then test the behavior
 at the boundary it touches.
 
+Keep raw trajectories in lossless binary chunks. Compute metrics and aggregation
+at full recorded resolution, then apply `analysis.points` at the shared summary
+export boundary; avoid independent trajectory-to-CSV paths in metrics or plots.
+
+Terminal progress is observational: workers send throttled step snapshots and the
+parent renders them. Keep UI state out of checkpoints, seeds, and scientific
+identities; test counters and estimates with controlled clocks, and smoke-test
+both a multi-worker terminal and redirected stderr.
+
 Group tests by the behavior they explain. Give each test module and class a
 clear scope, name scenarios by their expected outcome, and keep setup close to
 the assertions. Use small documented fixtures and comments to explain unusual

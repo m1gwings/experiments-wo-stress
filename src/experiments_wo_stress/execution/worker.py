@@ -18,14 +18,19 @@ from ..study.rng import make_rngs
 from ..study.specs import RunSpec
 from .compute import observe_attempt
 from .logging import run_logging
+from .progress import ProgressReporter
 
 _WORKER_STOP_EVENT: Any = None
+_WORKER_PROGRESS_QUEUE: Any = None
 
 
-def initialize_worker(event: Any) -> None:
-    """Install the shared stop event in a spawned process."""
-    global _WORKER_STOP_EVENT
+def initialize_worker(event: Any, progress_queue: Any = None) -> None:
+    """Install cancellation and optional, best-effort progress transport in a child."""
+    global _WORKER_STOP_EVENT, _WORKER_PROGRESS_QUEUE
     _WORKER_STOP_EVENT = event
+    _WORKER_PROGRESS_QUEUE = progress_queue
+    if progress_queue is not None:
+        progress_queue.cancel_join_thread()
     signal.signal(signal.SIGINT, signal.SIG_IGN)
 
 
@@ -51,6 +56,7 @@ class RunSession:
         recording: dict[str, Any],
         logger: logging.Logger,
         stop_event: Any,
+        progress: ProgressReporter | None = None,
     ) -> None:
         self.spec = spec
         self.root = root
@@ -59,6 +65,7 @@ class RunSession:
         self.recording = recording
         self.logger = logger
         self.stop_event = stop_event
+        self.progress = progress
         self.components: dict[str, Any] = {}
         self.metadata = read_json(store.directory / "metadata.json")
         self.rngs = {}
@@ -70,21 +77,32 @@ class RunSession:
     def run(self, max_steps: int | None) -> str:
         """Reuse, resume, or finish the requested prefix; return its execution status."""
         if self.store.completion(self.spec.budget_steps) is not None:
+            if not self.metadata.get("instance_id"):
+                raise StorageError("Completed run is missing its scientific instance reference")
+            load_instance(self.root, self.metadata["instance_id"])
             self.logger.info("Reusing completed results")
             return "skipped"
         self.restore_or_initialize()
+        if self.progress:
+            self.progress.update(self.protocol, force=True)
         started_step = self.protocol.step
         while not self.protocol.is_finished():
             if self.stop_event.is_set() or (
                 max_steps is not None and self.protocol.step - started_step >= max_steps
             ):
                 self.checkpoint("paused")
+                if self.progress:
+                    self.progress.update(self.protocol, force=True)
                 self.logger.info("Paused at step %s", self.protocol.step)
                 return "paused"
             self.advance()
+            if self.progress:
+                self.progress.update(self.protocol)
             if self.checkpoint_due() and not self.protocol.is_finished():
                 self.checkpoint()
         self.finalize()
+        if self.progress:
+            self.progress.update(self.protocol, force=True)
         return "completed"
 
     def restore_or_initialize(self) -> None:
@@ -196,12 +214,17 @@ def execute_run(
     storage_id: str,
     *,
     stop_event: Any = None,
+    progress_queue: Any = None,
 ) -> tuple[str, str, str | None]:
     """Spawn-safe process entry point; construct all run resources inside the worker."""
     spec = RunSpec.from_dict(spec_dict)
     directory = Path(root) / "runs" / storage_id
     store = None
     session = None
+    queue = _WORKER_PROGRESS_QUEUE if progress_queue is None else progress_queue
+    progress = (
+        ProgressReporter(queue, spec.run_id, spec.budget_steps) if queue is not None else None
+    )
     with run_logging(directory, spec.run_id, execution) as logger:
         try:
             if "gpu_ids" in execution:
@@ -224,10 +247,16 @@ def execute_run(
                 recording,
                 logger,
                 _WORKER_STOP_EVENT if stop_event is None else stop_event,
+                progress,
             )
-            return spec.run_id, session.run(max_steps), None
+            status = session.run(max_steps)
+            if progress:
+                progress.finish(status)
+            return spec.run_id, status, None
         except Exception as exc:
             error = f"{type(exc).__name__}: {exc}"
+            if progress:
+                progress.finish("failed")
             logger.exception("Run failed: %s", error)
             if store is not None:
                 try:

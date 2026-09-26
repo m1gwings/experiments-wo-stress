@@ -95,7 +95,7 @@ def main() -> int:
         )
         (study / "experiment.yml").write_text(CONFIG, encoding="utf-8")
         (study / "requirements.in").write_text(
-            "numpy>=1.24\nPyYAML>=6.0\nsetuptools>=68\nwheel\n", encoding="utf-8"
+            "numpy>=1.24\nPyYAML>=6.0\nrich>=13.7\nsetuptools>=68\nwheel\n", encoding="utf-8"
         )
         try:
             run(

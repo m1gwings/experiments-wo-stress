@@ -59,10 +59,12 @@ class PseudoRegretMetric:
         return means, actions
 
     def _regret(self, rewards: np.ndarray, observed: np.ndarray) -> np.ndarray:
+        # Promote before subtraction: saved booleans cannot be subtracted, and
+        # integer gaps can wrap before cumsum or MetricResult converts them.
         if self.comparator == "dynamic":
-            return np.cumsum(np.max(rewards, axis=1) - observed)
+            return np.cumsum(np.subtract(np.max(rewards, axis=1), observed, dtype=np.float64))
         # Accumulate differences to avoid cancellation between large reward sums.
-        differences = rewards - observed[:, None]
+        differences = np.subtract(rewards, observed[:, None], dtype=np.float64)
         np.cumsum(differences, axis=0, out=differences)
         return np.max(differences, axis=1)
 
@@ -74,7 +76,8 @@ class PseudoRegretMetric:
         if original.ndim == 1:
             # Both benchmarks coincide in a stationary instance. Keep working
             # memory O(T + K), instead of materializing a T x K cumulative array.
-            return MetricResult(results["step"], np.cumsum(np.max(original) - expected))
+            gaps = np.subtract(np.max(original), expected, dtype=np.float64)
+            return MetricResult(results["step"], np.cumsum(gaps))
         return MetricResult(results["step"], self._regret(means, expected))
 
 

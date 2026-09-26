@@ -394,6 +394,14 @@ def _recording_settings(value: Any) -> dict[str, Any]:
     return recording
 
 
+def analysis_points(analysis: Mapping[str, Any]) -> int | None:
+    """Resolve the curve export limit; null preserves every computed point."""
+    points = analysis.get("points", 100)
+    if points is not None:
+        _integer(points, "analysis.points", 2)
+    return points
+
+
 def load_config(path: str | Path) -> ExperimentConfig:
     """Load a YAML file with defaults, path resolution, and actionable errors."""
     path = Path(path).resolve()
@@ -419,7 +427,8 @@ def load_config(path: str | Path) -> ExperimentConfig:
     execution = _execution_settings(raw.get("execution", {}))
     recording = _recording_settings(raw.get("recording", {}))
     analysis = _mapping(raw.get("analysis", {}), "analysis")
-    _keys(analysis, {"metrics", "aggregator", "figures"}, "analysis")
+    _keys(analysis, {"points", "metrics", "aggregator", "figures"}, "analysis")
+    analysis = {**analysis, "points": analysis_points(analysis)}
     notifications = validate_notifications(raw.get("notifications", {}))
     config = ExperimentConfig(
         name, seed, groups, execution, recording, analysis, path.parent, notifications

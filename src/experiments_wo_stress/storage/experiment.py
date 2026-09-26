@@ -138,6 +138,16 @@ class ExperimentStore:
                     target = metadata.get("requests", {}).get(run_id, {}).get("budget_steps")
                     completion = RunStore(path.parent).completion(target)
                     if completion is not None:
+                        instance_id = read_json(path.parent / "metadata.json").get("instance_id")
+                        if (
+                            not instance_id
+                            and metadata["schema_version"] == EXPERIMENT_SCHEMA_VERSION
+                        ):
+                            raise StorageError(
+                                "Completed run is missing its scientific instance reference"
+                            )
+                        if instance_id:
+                            load_instance(root, instance_id)
                         progress = {
                             **progress,
                             "stored_status": status,
@@ -215,13 +225,16 @@ def save_instance(root: Path, instance: Instance, *, compression: bool = False) 
 
 def load_instance(root: Path, instance_id: str) -> Instance:
     """Load persisted scientific data without importing the simulator that created it."""
-    if not re.fullmatch(r"[a-f0-9]{64}", instance_id):
+    if not isinstance(instance_id, str) or not re.fullmatch(r"[a-f0-9]{64}", instance_id):
         raise StorageError("Invalid instance identifier")
     directory = root / "instances" / instance_id
     descriptor = read_json(directory / "metadata.json")
-    if descriptor.pop("id") != instance_id or digest_file(
-        directory / "arrays.npz"
-    ) != descriptor.pop("arrays_sha256"):
+    arrays_path = directory / "arrays.npz"
+    if (
+        descriptor.pop("id") != instance_id
+        or not arrays_path.is_file()
+        or digest_file(arrays_path) != descriptor.pop("arrays_sha256")
+    ):
         raise StorageError(f"Corrupt instance {instance_id}")
     with np.load(directory / "arrays.npz", allow_pickle=False) as arrays:
         descriptor["arrays"] = {name: arrays[name] for name in arrays.files}
@@ -267,6 +280,8 @@ def iter_completed_runs(output_dir: str | Path) -> Iterator[tuple[RunSpec, RunRe
         completed_steps = completion["step"] if requested_steps is None else requested_steps
         records, prefix_chunks = read_result_prefix(directory, manifest, completed_steps)
         instance_id = run_metadata.get("instance_id")
+        if not instance_id and version == EXPERIMENT_SCHEMA_VERSION:
+            raise StorageError("Completed run is missing its scientific instance reference")
         instance = load_instance(root, instance_id) if instance_id else Instance()
         revision = fingerprint(
             {

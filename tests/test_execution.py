@@ -20,7 +20,8 @@ import yaml
 
 from experiments_wo_stress import load_config, run_experiment
 from experiments_wo_stress.execution import provenance
-from experiments_wo_stress.storage import iter_completed_runs
+from experiments_wo_stress.storage import StorageError, iter_completed_runs
+from experiments_wo_stress.storage.experiment import inspect_experiment
 
 EXAMPLES = Path(__file__).resolve().parents[1] / "examples"
 
@@ -283,6 +284,36 @@ class ExecutionRecoveryTests(_ExecutionStudyTestCase):
         report = run_experiment(config, output)
         self.assertEqual((report.failed, report.skipped), (1, 0))
         self.assertTrue(report.errors)
+
+    def test_completed_reuse_and_inspection_reject_a_damaged_instance(self) -> None:
+        """Complete trajectories do not make a run valid without its scientific instance."""
+        config = self.load_study_config(self.single_run_settings())
+        for damage in ("missing", "corrupt", "missing_reference"):
+            with self.subTest(damage=damage):
+                output = self.root / damage
+                self.assertEqual(run_experiment(config, output).completed, 1)
+                path = next((output / "instances").glob("*/arrays.npz"))
+                if damage == "missing_reference":
+                    path = next((output / "runs").glob("*/metadata.json"))
+                original = path.read_bytes()
+                if damage == "missing":
+                    path.unlink()
+                elif damage == "missing_reference":
+                    metadata = json.loads(original)
+                    del metadata["instance_id"]
+                    path.write_text(json.dumps(metadata))
+                else:
+                    path.write_bytes(b"damaged instance")
+                counts = inspect_experiment(output)["counts"]
+                self.assertEqual((counts["completed"], counts["corrupt"]), (0, 1))
+                with self.assertRaisesRegex(StorageError, "instance"):
+                    list(iter_completed_runs(output))
+                report = run_experiment(config, output)
+                self.assertEqual((report.failed, report.skipped), (1, 0))
+                self.assertIn("instance", next(iter(report.errors.values())).lower())
+                # Reporting damage must preserve completed records for repair/reuse.
+                path.write_bytes(original)
+                self.assertEqual(run_experiment(config, output).skipped, 1)
 
     def test_failure_retries_from_last_safe_checkpoint(self) -> None:
         """Failure after feedback generation restores both component state and RNG state."""

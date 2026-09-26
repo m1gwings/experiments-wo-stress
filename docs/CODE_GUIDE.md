@@ -199,6 +199,17 @@ history remains unknown, and the researcher must account for other project
 compute. Measurement definitions are in
 [automatic compute reporting](CONFIGURATION.md#automatic-compute-reporting).
 
+### Follow live terminal progress
+
+[`execution/progress.py`](../src/experiments_wo_stress/execution/progress.py)
+contains the worker snapshot, throttled `ProgressReporter`, and parent-owned
+`TerminalProgress`. `RunSession` observes completed steps; the coordinator supplies
+submitted runs and authoritative outcomes. A bounded multiprocessing queue carries
+snapshots for CPU and GPU workers without changing either scheduler. One display
+thread refreshes Rich or plain stderr while scientific work proceeds. Inspect
+`WorkerProgress.eta` and `TerminalProgress.remaining` for attempt-aware and global
+estimates. This observer is independent of Discord and durable compute reporting.
+
 ### 3. Execute one complete interaction step
 
 Without GPU configuration, the coordinator calls `execute_run` locally for one
@@ -366,6 +377,9 @@ In [`analysis/pipeline.py`](../src/experiments_wo_stress/analysis/pipeline.py),
 `_aggregate_metrics` groups compatible repetitions; `_RepetitionAccumulator`
 updates the mean and squared deviations without keeping every run in memory.
 Each `Summary` holds coordinates, mean, uncertainty, labels, and repetition count.
+`_subsample_summary` then bounds each curve using `analysis.points` before tables
+or figures are exported. Full-resolution metric caches and aggregation checks
+remain intact; CSV and figures retain the selected original coordinates.
 
 [`analysis/cache.py`](../src/experiments_wo_stress/analysis/cache.py) contains
 `AnalysisCache`, which validates and publishes derived generations.
@@ -409,17 +423,18 @@ the interaction visible; temporary directories isolate persisted artifacts.
 | [test_data_generators.py](../tests/test_data_generators.py) | Saved CSV inputs, generated-data descriptions, and data cursor restoration. |
 | [test_bandits.py](../tests/test_bandits.py) | Reward generation, schedules, valid actions, and exact prefixes across extension. |
 | [test_gymnasium.py](../tests/test_gymnasium.py) | Environment snapshots, episode boundaries, and restoration through resets. |
-| [test_metrics.py](../tests/test_metrics.py) and [test_bandit_metrics.py](../tests/test_bandit_metrics.py) | General numerical metric contracts and explicit bandit comparator definitions. |
-| [test_analysis.py](../tests/test_analysis.py) | Aggregation rules, uncertainty, and figure regeneration from saved records. |
+| [test_metrics.py](../tests/test_metrics.py) and [test_bandit_metrics.py](../tests/test_bandit_metrics.py) | General numerical metric contracts, bandit comparator definitions, and dtype-safe regret arithmetic. |
+| [test_analysis.py](../tests/test_analysis.py) | Aggregation rules, exact cumulative values before subsampling, bounded exports, and figure regeneration. |
 | [test_analysis_cache.py](../tests/test_analysis_cache.py) | Cache reuse, invalidation, corruption detection, and exported copies. |
-| [test_execution.py](../tests/test_execution.py) | Worker-independent results, pause/resume, retained variants, and recovery after failures. |
+| [test_progress.py](../tests/test_progress.py) | Throttled worker snapshots, resumed progress, ETA, counters, bounded rows, and plain terminal output. |
+| [test_execution.py](../tests/test_execution.py) | Worker-independent results, pause/resume, retained variants, damaged-instance detection, and recovery after failures. |
 | [test_gpu_execution.py](../tests/test_gpu_execution.py) | GPU visibility before study imports, distinct and persistent worker assignments, single-GPU spawning, stable science, and cleanup without requiring CUDA. |
 | [test_gpu_recovery.py](../tests/test_gpu_recovery.py) | Real SIGTERM handling with bounded GPU scheduling, exact resume, and process cleanup after an abrupt worker exit. |
 | [test_compute_environment.py](../tests/test_compute_environment.py) | Mocked Linux/macOS hardware and filesystem queries, missing utilities, Windows omission, and artifact-size semantics without real GPUs. |
 | [test_compute.py](../tests/test_compute.py) | Deterministic invocation and attempt clocks, resume/reuse history, allocated GPU time, identity independence, and reporting failures. |
 | [test_compute_report.py](../tests/test_compute_report.py) | Immutable checked records, aggregation across invocations, unresolved/old timing, grouped summaries, and report rendering. |
 | [test_lifecycle.py](../tests/test_lifecycle.py) | Repeated invocations, cleanup, continuation, logging, and source compatibility. |
-| [test_storage.py](../tests/test_storage.py) | Instance persistence, state encoding, checkpoint publication, fallback, and result schemas. |
+| [test_storage.py](../tests/test_storage.py) | Instance persistence, NPZ field-name and numerical scalar roundtrips, checkpoint publication, fallback, and result schemas. |
 | [test_checkpoint_backends.py](../tests/test_checkpoint_backends.py) | Custom checkpoint representations, complete state and RNG replay, backend changes, multiple payload files, corruption, and publication failures. |
 | [test_notifications.py](../tests/test_notifications.py) | Configuration, mocked HTTP delivery, retry timing, and progress reporting. |
 | [test_cli.py](../tests/test_cli.py) | Six-command surface, optional run counts, successful execution through figures, and real process interruption with SIGTERM. |

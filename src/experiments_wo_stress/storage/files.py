@@ -7,6 +7,7 @@ import json
 import os
 import stat
 import uuid
+import zipfile
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -84,8 +85,13 @@ def write_arrays(path: Path, arrays: Mapping[str, np.ndarray], compression: bool
             raise TypeError(f"Array {name!r} must have a numerical dtype, not {array.dtype}")
     try:
         with temporary.open("wb") as stream:
-            writer = np.savez_compressed if compression else np.savez
-            writer(stream, **arrays)
+            # Write the standard NPZ members directly so fields such as "file"
+            # cannot collide with np.savez's own keyword parameters.
+            method = zipfile.ZIP_DEFLATED if compression else zipfile.ZIP_STORED
+            with zipfile.ZipFile(stream, "w", compression=method) as archive:
+                for name, array in arrays.items():
+                    with archive.open(f"{name}.npy", "w", force_zip64=True) as member:
+                        np.lib.format.write_array(member, np.asarray(array), allow_pickle=False)
             stream.flush()
             os.fsync(stream.fileno())
         os.replace(temporary, path)
@@ -155,7 +161,13 @@ def pack_state(value: Any, arrays: dict[str, np.ndarray]) -> Any:
         arrays[name] = value
         return {"kind": "array", "name": name}
     if isinstance(value, np.generic):
-        return pack_state(value.item(), arrays)
+        scalar = value.item()
+        if isinstance(scalar, (complex, np.generic)):
+            # Complex/extended scalars have no suitable JSON scalar; .item()
+            # can even return another NumPy scalar. Preserve their numeric dtype.
+            packed = pack_state(np.asarray(value), arrays)
+            return {"kind": "scalar", "name": packed["name"]}
+        return pack_state(scalar, arrays)
     if isinstance(value, Mapping):
         if not all(isinstance(key, str) for key in value):
             raise TypeError("Checkpoint dictionaries require string keys")
@@ -182,6 +194,8 @@ def unpack_state(value: Any, arrays: Mapping[str, np.ndarray]) -> Any:
     kind = value["kind"]
     if kind == "array":
         return arrays[value["name"]]
+    if kind == "scalar":
+        return arrays[value["name"]][()]
     if kind == "dict":
         return {key: unpack_state(item, arrays) for key, item in value["items"]}
     if kind in ("list", "tuple"):

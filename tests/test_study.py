@@ -82,6 +82,25 @@ class _StudyConfigurationCase(unittest.TestCase):
 class ConfigurationLoadingTests(_StudyConfigurationCase):
     """Validate and normalize YAML without constructing scientific components."""
 
+    def test_analysis_points_defaults_and_overrides_preserve_scientific_identity(self):
+        """The export limit is resolved in YAML and does not affect the scientific plan."""
+        default = self.load_configuration()
+        self.assertEqual(default.analysis["points"], 100)
+        for points in (2, 250, None):
+            with self.subTest(points=points):
+                self.document["analysis"] = {"points": points}
+                config = self.load_configuration()
+                self.assertEqual(config.to_dict()["analysis"]["points"], points)
+                self.assertEqual(config.simulation_dict(), default.simulation_dict())
+
+    def test_invalid_analysis_points_are_rejected(self):
+        """Require null or an integer of at least two to preserve both curve endpoints."""
+        for points in (-1, 0, 1, True, False, 100.0, "100", "all", []):
+            with self.subTest(points=points):
+                self.document["analysis"] = {"points": points}
+                with self.assertRaisesRegex(ValueError, r"analysis\.points"):
+                    self.load_configuration()
+
     def test_cpu_execution_defaults_do_not_include_gpu_configuration(self):
         """Ordinary CPU studies retain their existing resolved execution settings."""
         config = self.load_configuration()

@@ -107,7 +107,7 @@ def wait_gpu_workers(workers: Sequence[GPUWorker]) -> list[GPUWorker]:
             return completed
 
 
-def _worker_commands(connection: Connection, stop_event: Any) -> None:
+def _worker_commands(connection: Connection, stop_event: Any, progress_queue: Any = None) -> None:
     """Serve plain commands after spawn has inherited its final CUDA visibility."""
     # The coordinator handles both signals and asks for safe checkpoints through
     # the event. Importing components, including custom planners, happens later.
@@ -116,7 +116,7 @@ def _worker_commands(connection: Connection, stop_event: Any) -> None:
     from .provenance import prepare_gpu_request
     from .worker import execute_run, initialize_worker
 
-    initialize_worker(stop_event)
+    initialize_worker(stop_event, progress_queue)
     try:
         while True:
             command, payload = connection.recv()
@@ -144,12 +144,14 @@ def _worker_commands(connection: Connection, stop_event: Any) -> None:
         connection.close()
 
 
-def _start_gpu_worker(gpu_id: int, context: Any, stop_event: Any) -> GPUWorker:
+def _start_gpu_worker(
+    gpu_id: int, context: Any, stop_event: Any, progress_queue: Any = None
+) -> GPUWorker:
     """Launch with visibility established before spawn reimports caller modules."""
     parent_connection, child_connection = context.Pipe()
     process = context.Process(
         target=_worker_commands,
-        args=(child_connection, stop_event),
+        args=(child_connection, stop_event, progress_queue),
         name=f"ews-gpu-{gpu_id}",
     )
     try:
@@ -205,7 +207,9 @@ def _join_gpu_worker(worker: GPUWorker) -> None:
 
 
 @contextmanager
-def gpu_workers(gpu_ids: Sequence[int], context: Any, stop_event: Any) -> Iterator[list[GPUWorker]]:
+def gpu_workers(
+    gpu_ids: Sequence[int], context: Any, stop_event: Any, progress_queue: Any = None
+) -> Iterator[list[GPUWorker]]:
     """Launch one worker per GPU and close every process and pipe on all exits.
 
     Explicit IDs refer to the unmasked CUDA device order. Reject an inherited
@@ -217,7 +221,7 @@ def gpu_workers(gpu_ids: Sequence[int], context: Any, stop_event: Any) -> Iterat
     workers: list[GPUWorker] = []
     try:
         for gpu_id in gpu_ids:
-            workers.append(_start_gpu_worker(gpu_id, context, stop_event))
+            workers.append(_start_gpu_worker(gpu_id, context, stop_event, progress_queue))
         yield workers
     except BaseException:
         stop_event.set()

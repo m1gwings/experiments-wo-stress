@@ -24,6 +24,11 @@ aggregator averages regret over repetitions and computes a standard error; the
 figure exporter writes PDF, JPG, and editable TikZ files. Regret is computed
 from saved data, rather than accumulated inside the generator.
 
+All 1,000 recorded rounds remain in raw `.npz` chunks. After full regret
+calculation and aggregation, `analysis.points: 100` keeps 100 points per curve
+for CSV, summary NPZ, and figures, with the original round numbers and both
+endpoints. Set it to `null` for full-resolution analysis exports.
+
 ## Run it
 
 From the repository root:
@@ -39,6 +44,10 @@ analysis; figures appear under `outputs/bandits/analysis/figures/`. Running it
 again reuses compatible completed work. To preview the size first, the optional
 `ews count-runs examples/sequential_study/experiment.yml` reports 120 runs.
 You do not need to invoke `count-runs` before `run`.
+
+During execution, interactive stderr shows a live worker dashboard. Redirected
+stderr receives periodic plain summaries; add `--quiet` to retain only final
+summaries and errors. JSON reports remain on stdout.
 
 To see interruption and resumption, use a separate output directory:
 

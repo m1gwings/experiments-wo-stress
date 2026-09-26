@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import io
 import json
 import os
@@ -196,6 +197,23 @@ class CommandLineTests(unittest.TestCase):
         self.assertNotIn("figures", first)
         self.assertFalse((output / "analysis").exists())
 
+    def test_progress_stays_on_stderr_and_quiet_keeps_final_summary(self):
+        """Redirected monitoring is plain text; stdout retains the existing JSON contract."""
+        output = self.root / "progress"
+        for quiet in (False, True):
+            with self.subTest(quiet=quiet):
+                args = ["run", str(self.config), "--output", str(output), "--workers", "2"]
+                if quiet:
+                    args.append("--quiet")
+                result = subprocess.run(
+                    self.command(*args), capture_output=True, text=True, timeout=30
+                )
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(json.loads(result.stdout)["skipped" if quiet else "completed"], 2)
+                self.assertIn("[ews] Completed:", result.stderr)
+                self.assertNotIn("\x1b", result.stderr)
+                self.assertEqual("remaining" in result.stderr, not quiet)
+
     def test_run_with_metrics_creates_summaries_without_a_separate_analysis_command(self) -> None:
         self.short_study(analysis=self.analysis_settings())
         output = self.root / "metrics"
@@ -221,6 +239,36 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual((second["skipped"], second["failed"]), (2, 0))
         self.assertEqual(second["figures"], first["figures"])
         self.assertEqual(self.cache_files(output), cached)
+
+    def test_run_keeps_full_binary_trajectories_and_bounds_all_csv_and_figure_outputs(self):
+        """The complete CLI workflow never emits a second, full trajectory as CSV."""
+        horizon = 201
+        self.settings["runs"][0]["protocol"]["params"]["horizon"] = horizon
+        self.settings["runs"][0]["repetitions"] = 1
+        self.settings["execution"]["checkpoint_steps"] = None
+        self.settings["recording"]["buffer_bytes"] = 4096
+        self.settings["analysis"] = self.analysis_settings(figures=True)
+        self.write_configuration()
+        output = self.root / "bounded"
+        report = self.invoke("run", str(self.config), "--output", str(output))
+        self.assertEqual((report["completed"], report["failed"]), (1, 0))
+        steps = []
+        for path in sorted((output / "runs").glob("*/results/*.npz")):
+            with np.load(path, allow_pickle=False) as saved:
+                steps.append(saved["step"])
+                self.assertEqual(len(saved["position"]), len(saved["step"]))
+        np.testing.assert_array_equal(np.concatenate(steps), np.arange(1, horizon + 1))
+        tables = list(output.rglob("*.csv"))
+        self.assertTrue(tables)
+        for table in tables:
+            with table.open(newline="") as handle:
+                rows = list(csv.DictReader(handle))
+            self.assertEqual(len(rows), 100, str(table))
+            self.assertEqual((int(rows[0]["x"]), int(rows[-1]["x"])), (1, horizon))
+        source = Path(report["figures"][0]).read_text()
+        coordinates = re.findall(r"\((\d+),[^)]+\)", source)
+        self.assertEqual(len(coordinates), 100)
+        self.assertEqual((int(coordinates[0]), int(coordinates[-1])), (1, horizon))
 
     def test_failed_or_explicitly_paused_runs_do_not_start_configured_analysis(self) -> None:
         for fail in (False, True):

@@ -88,6 +88,21 @@ store. `RunStore` owns one variant's durable boundaries; `Recorder` buffers its
 observations. `AnalysisCache` handles immutable cache generations and exports,
 while metric computation and aggregation remain in the analysis pipeline.
 
+`execution/progress.py` observes these existing execution paths. Workers send
+small snapshots through a bounded multiprocessing queue at most four times per
+second, with forced terminal updates. Saturated monitoring queues may discard
+snapshots; coordinator results remain authoritative for counts and final 100%
+completion. Both CPU and GPU workers use the same transport. Progress uses the
+existing protocol step and budget; atomic offline/trial work has one unit and
+custom protocols may supply `total_steps` when no budget is known.
+
+The CLI owns `TerminalProgress`, whose single parent-side display thread drains
+snapshots and updates Rich or periodic plain stderr lines. This also refreshes
+elapsed time while a sequential fit blocks inside one operation. Rows are keyed
+by process ID and replaced on worker reuse. The context closes the display and
+queue on success, failure, or interruption; workers never render. Notifications
+continue to use their independent sparse sender and durable checkpoint readings.
+
 `CheckpointBackend` in `storage/checkpoints.py` separates checkpoint representation
 from `RunStore`'s transaction. The default `NumPyCheckpointBackend` uses explicit
 JSON and NPZ encoding; a study backend can preserve native framework state or
@@ -147,9 +162,10 @@ their matching saved configuration.
 Compute metadata never enters these identities. Reporting modules are excluded
 from simulation fingerprints, and reporting does not change analysis cache
 inputs. `execution/compatibility.py` maps exact, reviewed reporting-only versions
-of the coordinator, worker, provenance, and figure-export files to their preceding
-digests. This narrow compatibility bridge preserves existing scientific variants
-and figure caches when instrumentation is introduced. An unrecognized source
+of the coordinator, worker, GPU resource, provenance, and figure-export files to
+their preceding digests. This narrow compatibility bridge preserves existing
+scientific variants and figure caches when compute or terminal instrumentation
+is introduced. An unrecognized source
 digest still invalidates reuse conservatively; it is not a general exemption for
 implementation edits.
 
@@ -185,7 +201,8 @@ Direct execution and budget extension therefore produce the same recorded steps.
 
 Recording selects numerical fields and logical steps. `step` is always included,
 and each field must keep a consistent numerical dtype and shape. Immutable NumPy
-result chunks flush at a per-run byte target (16 MiB by default), before
+`.npz` result chunks preserve every recorded observation, without a duplicate
+trajectory CSV. They flush at a per-run byte target (16 MiB by default), before
 checkpoints, and at completion. A chunk flush alone is not a resumable
 checkpoint. Buffering is per active run, in addition to component state and
 serialization memory.
@@ -205,6 +222,8 @@ output/
     run.log                       rotating diagnostics
   analysis/
     cache/                        metric, aggregate, and figure caches
+    <metric>.csv                  bounded curves, original x coordinates
+    <metric>.npz                  the same bounded summary arrays
     figures/                      current exports
   compute/
     invocations/<uuid>.json       immutable finished invocation records
@@ -219,6 +238,9 @@ within a generation are internal. `iter_completed_runs` yields run
 specifications and `RunResult` objects, each with recorded fields, the saved
 instance, a completed step count, revision, and final outputs. For single-step
 offline or trial runs, `final_outputs` exposes the last recorded values.
+Completed-run reuse and `inspect` validate the saved instance as well as the
+trajectory chunks. Missing or damaged scientific inputs are reported as corruption;
+intact result chunks alone are insufficient for successful reuse.
 
 ## Checkpoints, completion, and interruption
 
@@ -339,6 +361,18 @@ every action or reward rejects an incomplete trajectory; unrecorded data cannot
 be reconstructed from a figure or cache. Aggregation combines compatible
 repetitions with aligned coordinates and an explicit uncertainty convention. One
 repetition has no defined sample standard deviation or standard error.
+Supplied regret metrics subtract and accumulate in float64, independently of the
+saved reward dtype, so boolean and integer inputs retain signed regret gaps.
+
+Per-run metrics and their binary caches retain full resolution. After full
+aggregation and coordinate validation, the pipeline selects at most
+`analysis.points` positions per summary (default 100). Rounded evenly spaced
+row positions include both endpoints and preserve original x coordinates.
+Short curves remain intact; `null` disables the limit, and integers must be at
+least 2. CSV, summary NPZ, and figure consumers share these reduced summaries.
+The limit affects aggregate and figure cache identities only, so changing it
+reuses metric calculations and raw simulations. Existing full-resolution cache
+generations remain retained until analysis cleanup.
 
 The analysis pipeline does not define a universal regret measure. The supplied
 `pseudo_regret` and `realized_regret` metrics live in `builtins/metrics.py` because

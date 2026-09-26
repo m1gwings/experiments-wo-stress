@@ -86,6 +86,20 @@ class AnalysisCacheTests(unittest.TestCase):
         analyze(self.analysis_config(settings), self.root)
         self.assertEqual(len(self.cache_directories("metrics")), 3)
 
+    def test_point_limit_versions_exports_and_figures_without_recomputing_metrics(self):
+        """Changing resolution reuses exact metric curves and refreshes downstream output."""
+        first = plot(self.analysis_config(), self.root)[0].read_text()
+        settings = deepcopy(self.settings)
+        settings["points"] = 2
+        with mock.patch.object(FieldMetric, "compute", side_effect=AssertionError("recomputed")):
+            reduced = plot(self.analysis_config(settings), self.root)[0].read_text()
+            self.assertNotEqual(first, reduced)
+            settings["points"] = None
+            self.assertEqual(plot(self.analysis_config(settings), self.root)[0].read_text(), first)
+        self.assertEqual(len(self.cache_directories("metrics")), 1)
+        self.assertEqual(len(self.cache_directories("aggregates")), 3)
+        self.assertEqual(len(self.cache_directories("plots")), 3)
+
     def test_corrupt_metric_cache_is_reported(self):
         """Damaged cached numerical results raise an explicit corruption error."""
         analyze(self.analysis_config(), self.root)
@@ -157,3 +171,7 @@ class AnalysisCacheTests(unittest.TestCase):
         manifest = json.loads((self.cache_directories("metrics")[0] / "cache.json").read_text())
         sources = manifest["identity"]["metric"]["implementation"]["sources"]
         self.assertIn("experiments_wo_stress.builtins.metrics", sources)
+        settings["points"] = 2
+        reduced = analyze(self.analysis_config(settings), self.root)[0]
+        np.testing.assert_array_equal(reduced.x, [1, 3])
+        np.testing.assert_allclose(reduced.mean, [0.6, 1.2])

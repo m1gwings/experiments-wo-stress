@@ -232,6 +232,35 @@ processes. Python scripts starting process workers need the usual
 `if __name__ == "__main__":` guard. GPU execution also needs this guard with one
 worker.
 
+`ews run` automatically monitors execution on stderr: an interactive terminal
+gets a Rich dashboard with one row per worker process, while redirected output
+gets plain updates at most every 30 seconds. Failures are reported immediately;
+every invocation prints a final execution summary. `--quiet` disables continuous
+monitoring and its worker messages, keeping final summaries and errors. JSON
+stdout, file logging, and Discord delivery retain their separate roles. Rich
+respects `NO_COLOR`; terminal width controls name truncation and bar visibility.
+
+Progress uses the protocol's completed `step` and requested `budget.steps`.
+Online/RL budgets count rounds/environment transitions; built-in offline fits
+and trials are one indivisible operation, with no invented progress inside it.
+A custom protocol without a budget may optionally expose a positive integer
+`total_steps` in the same units as `step`. Without a known total the display is
+indeterminate. No terminal logic belongs in study components.
+
+Per-run ETA uses work completed since initialization/restoration, after at least
+two seconds and 1% of new work. Global ETA uses the median of up to 32 observed
+completed-run durations, unfinished active fractions, queued work, and available
+worker concurrency. It waits at least five seconds and one completed execution;
+reused and failed runs do not train the estimate. Estimates are approximate,
+especially for heterogeneous runs or resumed prefixes. Dashboard completed
+counts include reused results; the final summary lists reuse separately.
+
+The Python `run_experiment` API remains silent by default. Its optional
+`progress=` argument accepts an entered `TerminalProgress(name, workers)` context
+from `experiments_wo_stress.execution.progress`; the CLI supplies this observer
+automatically. Monitoring state is temporary and never changes run identities,
+RNG streams, checkpoint contents, or failure/cancellation policy.
+
 Checkpoints use time and step triggers; `null` disables either trigger.
 A pause, graceful interruption, or completion also saves state. Compression trades
 CPU time for disk space; `execution.compression` controls recorded arrays and the
@@ -538,6 +567,7 @@ artifact model.
 
 ```yaml
 analysis:
+  points: 100  # Default; null keeps full analysis resolution.
   metrics:
     - name: regret
       type: pseudo_regret
@@ -594,6 +624,27 @@ has undefined sample uncertainty, stored as NaN and omitted from the figure.
 Standard error is not a confidence interval. Include all varying scientific
 parameters in `group_by`; incompatible configurations, duplicate repetitions, and
 misaligned coordinates are rejected.
+
+`analysis.points` bounds each metric/group curve in returned `Summary` objects,
+CSV tables, summary `.npz` files, and figures (including custom plotters). The
+default is 100; set an integer of at least 2, or `null` to retain all points.
+`1` is rejected because it cannot preserve both endpoints. Scalar curves and
+curves no longer than the limit retain every point. Longer curves use
+deterministic, approximately equally spaced row positions with no duplicates,
+including the first and last; CSV column `x` retains the metric's actual
+coordinates, usually one-based protocol steps, rather than renumbering samples.
+
+Raw trajectories remain full-resolution binary `.npz` chunks at the requested
+recording frequency; no raw trajectory CSV is written. Metrics (including
+cumulative reward and regret), coordinate validation, and aggregation compute
+over every recorded observation before reducing the representation. Per-run
+metric caches also retain full-resolution `.npz` curves. Changing `points`
+reuses these metrics and simulations and versions aggregate/figure outputs.
+Existing configurations now get compact curves by default; `points: null`
+restores the previous full-resolution analysis behavior. A table with multiple
+groups has up to `points` rows per group. For cumulative metrics, keep
+`recording.every_steps: 1`; sparse recording discards inputs and is independent
+of this export setting.
 
 `ews analyze` writes summary tables under `analysis/` and reuses valid cached
 work. Only completed, validated runs contribute; summaries report their actual

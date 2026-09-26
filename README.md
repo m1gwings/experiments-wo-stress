@@ -75,6 +75,7 @@ runs:
 execution: {workers: 1}
 recording: {every_steps: 1, fields: [action, reward]}
 analysis:
+  points: 100  # Default; null exports every computed point.
   metrics:
     - {name: regret, type: pseudo_regret}
   aggregator:
@@ -93,6 +94,14 @@ repetitions, producing 120 runs. The classes under `experiment_code/` define the
 bandit and learning rules; the library handles execution and storage. Recorded
 actions and rewards, together with the saved bandit instance, support regret
 analysis afterward.
+
+Raw trajectories retain every recorded step in binary `.npz` chunks, without a
+duplicate trajectory CSV. Metrics and aggregation use all recorded observations;
+`analysis.points` then limits each exported curve to 100 approximately evenly
+spaced points by default, including both endpoints. CSV tables, summary `.npz`
+files, and figures share those points and their original coordinates. Short
+curves keep all points. Use an integer of at least 2, or `null` for full analysis
+resolution; this setting does not change recording or simulation results.
 
 From the repository root, optionally check the run count, then run the study:
 
@@ -179,6 +188,27 @@ The backend saves and loads logical state; EWS still owns complete-step
 checkpoint boundaries, checksums, atomic publication, recovery, and retention.
 See [checkpoint backends](docs/CONFIGURATION.md#checkpoint-backends) for the
 interface and a small implementation example.
+
+## While a study runs
+
+`ews run` shows a colored live dashboard on an interactive stderr terminal:
+
+```text
+Experiments W/O Stress — gaussian_bandit_comparison
+Worker  Run                       Progress       Elapsed  ETA   Status
+0       ucb r003 a21f00 /main      ━━━━━━     63% 02:14    ~1m   running
+1       epsilon r003 b70e11 /main  ━━━━       41% 01:37    ~2m   running
+Runs  17/48 completed | 2 running | 29 queued | 0 failed
+Elapsed 18:42 | Remaining ~31m | Finish ~16:46
+```
+
+Rows follow workers as they take new runs. Estimates appear after enough work
+has been observed; unknown totals stay indeterminate. Redirected stderr gets
+plain updates every 30 seconds, plus immediate failures and a final summary.
+`--quiet` keeps only final summaries and errors. JSON stays on stdout, `NO_COLOR`
+is respected, and Ctrl-C keeps the existing safe checkpoint-and-stop behavior.
+Per-run tracebacks remain in `run.log` and `failure.json`. Discord notifications
+remain separate from terminal updates.
 
 ## Suggested setup
 

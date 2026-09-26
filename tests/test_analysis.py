@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import csv
 import importlib.util
 import json
 import tempfile
@@ -14,6 +15,7 @@ from types import SimpleNamespace
 import numpy as np
 
 from experiments_wo_stress.analysis import analyze
+from experiments_wo_stress.analysis.pipeline import Summary, _subsample_summary
 from experiments_wo_stress.jobs import ComponentSpec, RunSpec
 from experiments_wo_stress.plotting import plot
 from experiments_wo_stress.storage import Recorder, RunStore, atomic_json
@@ -149,6 +151,81 @@ class AggregationTests(_PersistedAnalysisCase):
         )
         # Change the x axis using a custom metric, preserving valid storage itself.
         settings = deepcopy(self.settings)
+        settings["metrics"][0]["params"]["x"] = "reward"
+        with self.assertRaisesRegex(ValueError, "mismatched x"):
+            analyze(self.analysis_config(settings), self.root)
+
+
+class AnalysisResolutionTests(_PersistedAnalysisCase):
+    """Keep exports compact without changing metric calculations or alignment checks."""
+
+    def test_selection_is_bounded_evenly_spaced_and_deterministic(self) -> None:
+        """Retain short/scalar curves and unique endpoints, including on very long curves."""
+        cases = [(length, 100) for length in (1, 99, 100, 101, 1_000_000)]
+        cases.extend([(11, 4), (101, 2), (101, None)])
+        for length, points in cases:
+            with self.subTest(length=length, points=points):
+                x = 5 + 3 * np.arange(length)
+                original = Summary("reward", {}, x, x, x, 1, "none")
+                selected = _subsample_summary(original, points)
+                expected_size = length if points is None else min(length, points)
+                self.assertEqual(len(selected.x), expected_size)
+                np.testing.assert_array_equal(selected.x[[0, -1]], x[[0, -1]])
+                self.assertEqual(len(np.unique(selected.x)), expected_size)
+                np.testing.assert_array_equal(selected.mean, selected.x)
+                np.testing.assert_array_equal(selected.uncertainty, selected.x)
+                np.testing.assert_array_equal(_subsample_summary(original, points).x, selected.x)
+                if length == expected_size:
+                    self.assertIs(selected, original)
+                else:
+                    gaps = np.diff(selected.x) // 3
+                    self.assertLessEqual(gaps.max() - gaps.min(), 1)
+
+    def test_cumulative_exports_preserve_exact_values_and_uncertainty(self) -> None:
+        """Compute all increments before reducing tables and their binary summary copies."""
+        steps = range(1, 302)
+        rewards = np.asarray(steps, dtype=float) ** 2
+        self.save_run(self.base_spec, rewards, steps=steps)
+        self.save_run(
+            replace(self.base_spec, run_id="bbbbbbbbbbbbbbbbbbbb", repetition=1),
+            3 * rewards,
+            steps=steps,
+        )
+        settings = deepcopy(self.settings)
+        settings["metrics"][0]["type"] = "cumulative_sum"
+        summary = analyze(self.analysis_config(settings), self.root)[0]
+        self.assertEqual(len(summary.x), 100)
+        cumulative = np.cumsum(rewards)
+        np.testing.assert_array_equal(summary.mean, 2 * cumulative[summary.x - 1])
+        np.testing.assert_allclose(summary.uncertainty, cumulative[summary.x - 1])
+        table = self.root / "analysis" / "reward.csv"
+        with table.open(newline="") as handle:
+            rows = list(csv.DictReader(handle))
+        self.assertEqual(len(rows), 100)
+        np.testing.assert_array_equal([int(row["x"]) for row in rows], summary.x)
+        np.testing.assert_allclose([float(row["mean"]) for row in rows], summary.mean)
+        with np.load(table.with_suffix(".npz"), allow_pickle=False) as saved:
+            np.testing.assert_array_equal(saved["group_0_x"], summary.x)
+            np.testing.assert_array_equal(saved["group_0_mean"], summary.mean)
+        for path in (self.root / "analysis" / "cache" / "metrics").glob("*/result.npz"):
+            with np.load(path, allow_pickle=False) as saved:
+                np.testing.assert_array_equal(saved["x"], steps)
+
+        settings["points"] = None
+        full = analyze(self.analysis_config(settings), self.root)[0]
+        np.testing.assert_array_equal(full.x, steps)
+        np.testing.assert_array_equal(full.mean, 2 * cumulative)
+        with table.open(newline="") as handle:
+            self.assertEqual(len(list(csv.DictReader(handle))), len(steps))
+
+    def test_subsampling_cannot_hide_misaligned_coordinates(self) -> None:
+        """A mismatch at an omitted interior coordinate must still reject aggregation."""
+        self.save_run(self.base_spec, [1, 2, 3])
+        self.save_run(
+            replace(self.base_spec, run_id="bbbbbbbbbbbbbbbbbbbb", repetition=1), [1, 9, 3]
+        )
+        settings = deepcopy(self.settings)
+        settings["points"] = 2
         settings["metrics"][0]["params"]["x"] = "reward"
         with self.assertRaisesRegex(ValueError, "mismatched x"):
             analyze(self.analysis_config(settings), self.root)

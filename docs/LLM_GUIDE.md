@@ -177,6 +177,7 @@ recording:
   fields: [action, reward]
   buffer_bytes: 1048576
 analysis:
+  points: 100
   metrics:
     - {name: regret, type: pseudo_regret}
     - {name: mean_reward, type: 'experiment_code.metrics:MeanReward'}
@@ -539,6 +540,20 @@ contains final recorded values for single-step offline and trial runs. Declare
 `required_fields`, `required_instance_fields`, or `requires_complete_trajectory`
 when the calculation needs them.
 
+Raw observations are lossless `.npz` chunks at the configured recording
+frequency; the pipeline does not duplicate raw trajectories as CSV. Metrics
+and aggregation use every recorded point, including all increments for
+cumulative quantities. Then `analysis.points` (default 100) bounds each
+metric/group curve returned by `analyze`, written to CSV and summary NPZ, and
+passed to built-in or custom plotters. Choose an integer of at least 2 or
+`null` for full analysis resolution. Short and scalar curves retain all points;
+long curves retain deterministic, approximately evenly spaced row positions
+including both endpoints, without duplicates. CSV `x` keeps actual metric
+coordinates, usually one-based steps. `1` is rejected to preserve both endpoints.
+This export setting leaves raw data and full metric caches intact and does not
+affect simulation identities. Use `recording.every_steps: 1` for complete
+trajectories; reducing recording frequency discards metric inputs.
+
 Built-in metrics include `field`, `cumulative_sum`, `pseudo_regret`, and
 `realized_regret`. Pseudo-regret uses saved actions and instance `means`, with a
 `dynamic` or `best_fixed` comparator. Realized regret instead requires saved
@@ -571,6 +586,27 @@ with `group`, `repetition`, `algorithm_name`, `algorithm`, `data`, `protocol`,
 ```bash
 ews run experiment.yml --output outputs/study --workers 2
 ```
+
+`run` automatically shows a Rich dashboard on interactive stderr, with one row
+per worker, progress, elapsed time, approximate ETA, and study counts. Redirected
+stderr receives plain updates every 30 seconds; failures are immediate and final
+summaries are always emitted. `--quiet` keeps only final summaries and errors.
+JSON stays on stdout and `NO_COLOR` disables colors. Ctrl-C retains safe
+step-boundary cancellation and restores the terminal. Study components should
+use their injected logger, not print competing progress bars. Tracebacks stay in
+per-run `run.log` and `failure.json`; Discord remains independent.
+
+Progress uses `step / budget.steps` for online/RL work. Offline fits and trials
+have one indivisible step. A custom protocol with no budget may optionally expose
+a positive integer `total_steps` in protocol-step units; otherwise progress is
+indeterminate. Per-run ETA measures only new work since restoration, waiting for
+two seconds and 1% progress. Global ETA waits for five seconds and a completed
+execution, then combines recent median run durations, queued work, active fractions,
+and concurrency; reuse/failures do not train it. Estimates are approximate for
+heterogeneous workloads. The Python `run_experiment` API remains silent unless
+given `progress=` with an entered `TerminalProgress(name, workers)` context from
+`experiments_wo_stress.execution.progress`. Monitoring changes no scientific state
+or identities.
 
 `run` executes or resumes the study, then produces configured analysis and
 figures only if there are no failed, paused, or pending runs. Rerun the same

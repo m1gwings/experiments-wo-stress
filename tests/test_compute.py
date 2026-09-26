@@ -18,7 +18,7 @@ from experiments_wo_stress import load_config, plan_runs, run_experiment
 from experiments_wo_stress.cli import main
 from experiments_wo_stress.execution import compute, provenance
 from experiments_wo_stress.execution.compatibility import (
-    _COMPUTE_ONLY_REVISIONS,
+    _OBSERVATIONAL_REVISIONS,
     implementation_digest,
 )
 from experiments_wo_stress.storage import iter_completed_runs
@@ -241,7 +241,7 @@ class ComputeLifecycleTests(unittest.TestCase):
 
         def legacy_provenance(*args):
             result = original_collect(*args)
-            for name, (_, previous) in _COMPUTE_ONLY_REVISIONS.items():
+            for name, (_, previous) in _OBSERVATIONAL_REVISIONS.items():
                 if name in result["implementation"]:
                     result["implementation"][name] = previous
             return result
@@ -259,7 +259,7 @@ class ComputeLifecycleTests(unittest.TestCase):
 
         with patch(
             "experiments_wo_stress.analysis.figures.implementation_digest",
-            return_value=_COMPUTE_ONLY_REVISIONS["analysis/figures.py"][1],
+            return_value=_OBSERVATIONAL_REVISIONS["analysis/figures.py"][1],
         ):
             plot(self.config, self.output)
         cache = {
@@ -288,7 +288,7 @@ class ComputeLifecycleTests(unittest.TestCase):
 
     def test_reviewed_hooks_preserve_old_digests_but_future_edits_do_not(self):
         package = Path(provenance.__file__).resolve().parents[1]
-        for name, (reviewed, previous) in _COMPUTE_ONLY_REVISIONS.items():
+        for name, (reviewed, previous) in _OBSERVATIONAL_REVISIONS.items():
             with self.subTest(module=name):
                 self.assertEqual(provenance.digest_file(package / name), reviewed)
                 self.assertEqual(implementation_digest(name, reviewed), previous)

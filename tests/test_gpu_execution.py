@@ -6,6 +6,7 @@ labels here; actual results still use the injected NumPy stream.
 
 from __future__ import annotations
 
+import io
 import json
 import multiprocessing
 import os
@@ -19,9 +20,11 @@ from unittest.mock import patch
 
 import numpy as np
 import yaml
+from rich.console import Console
 
 from experiments_wo_stress import load_config, run_experiment
 from experiments_wo_stress.execution.compute_environment import supported
+from experiments_wo_stress.execution.progress import TerminalProgress
 from experiments_wo_stress.storage import iter_completed_runs
 
 COMPONENTS = '''"""Inspect process visibility without importing a GPU framework."""
@@ -182,6 +185,21 @@ class GPUExecutionTests(unittest.TestCase):
             summary = json.loads((output / "compute" / "summary.json").read_text())
             self.assertEqual(summary["totals"]["gpu_seconds"], attempt["wall_seconds"])
             self.assertEqual(summary["totals"]["gpu_hours"], attempt["wall_seconds"] / 3600)
+
+    def test_progress_observes_gpu_workers_without_importing_study_in_parent(self):
+        """The same progress queue observes real assigned processes and keeps bounded rows."""
+        config = self.configuration([3, 7], repetitions=4, peers=2)
+        output = self.root / "progress"
+        stream = io.StringIO()
+        with TerminalProgress(config.name, 2, console=Console(file=stream)) as progress:
+            report = run_experiment(config, output, progress=progress)
+            progress.finish(report.to_dict())
+        self.assertEqual((report.completed, report.failed), (4, 0), report.errors)
+        self.assertEqual(len(progress.rows), 2)
+        self.assertTrue(all(row.fraction == 1 for row in progress.rows.values()))
+        self.assertNotIn(self.module, sys.modules)
+        self.assertNotIn("\x1b", stream.getvalue())
+        self.assertFalse(multiprocessing.active_children())
 
     def test_workers_keep_distinct_assignments_across_runs(self):
         config = self.configuration([3, 8], repetitions=8, peers=2)

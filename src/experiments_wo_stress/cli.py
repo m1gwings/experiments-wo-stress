@@ -10,6 +10,7 @@ from typing import Any
 
 from .execution.compute import Invocation
 from .execution.coordinator import run_experiment
+from .execution.progress import TerminalProgress
 from .storage.experiment import inspect_experiment
 from .study.config import ExperimentConfig, load_config
 from .study.planning import plan_runs
@@ -21,6 +22,7 @@ def _run_study(
     *,
     workers: int | None,
     max_steps: int | None,
+    quiet: bool = False,
 ) -> tuple[dict[str, Any], int]:
     """Execute the request, then derive its configured outputs only after completion."""
     invocation = Invocation(
@@ -30,7 +32,15 @@ def _run_study(
     )
     try:
         with invocation:
-            report = run_experiment(config, output, workers=workers, max_steps=max_steps)
+            with TerminalProgress(
+                config.name,
+                config.execution["workers"] if workers is None else workers,
+                quiet=quiet,
+            ) as progress:
+                report = run_experiment(
+                    config, output, workers=workers, max_steps=max_steps, progress=progress
+                )
+                progress.finish(report.to_dict())
             result = report.to_dict()
             # A completed subset must not stand in for the whole requested study.
             # An intentional pause succeeds but defers analysis and figures.
@@ -101,6 +111,11 @@ def main(argv: list[str] | None = None) -> int:
                 "--output", "-o", type=Path, required=True, help="Artifact directory."
             )
         if command == "run":
+            child.add_argument(
+                "--quiet",
+                action="store_true",
+                help="Show only final execution summaries and errors.",
+            )
             child.add_argument("--workers", type=int, help="Override the local worker count.")
             child.add_argument(
                 "--max-steps", type=int, help="Pause each run after this many new steps."
@@ -149,7 +164,11 @@ def main(argv: list[str] | None = None) -> int:
                 result = {"name": config.name, "runs": len(plan_runs(config))}
             elif args.command == "run":
                 result, exit_code = _run_study(
-                    config, args.output, workers=args.workers, max_steps=args.max_steps
+                    config,
+                    args.output,
+                    workers=args.workers,
+                    max_steps=args.max_steps,
+                    quiet=args.quiet,
                 )
             elif args.command == "analyze":
                 from .analysis.pipeline import analyze
@@ -162,6 +181,9 @@ def main(argv: list[str] | None = None) -> int:
                 result = {"figures": [str(path) for path in plot(config, args.output)]}
         print(json.dumps(result, indent=2))
         return exit_code
+    except KeyboardInterrupt:
+        print("ews: interrupted", file=sys.stderr)
+        return 130
     except (ValueError, TypeError, RuntimeError, OSError, ImportError, KeyError) as exc:
         print(f"ews: {exc}", file=sys.stderr)
         return 1
