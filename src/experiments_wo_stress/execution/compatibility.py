@@ -1,16 +1,25 @@
-"""Preserve scientific compatibility for the reviewed compute and terminal observation hooks.
+"""Preserve scientific compatibility for the reviewed compute, terminal, and artifact discovery hooks.
 
 Only the exact observation revisions below inherit their preceding source
 digest. Any further edit falls back to its real digest, so scientific execution
-changes still invalidate reuse. Reporting modules themselves are operational and
+changes still invalidate reuse. Discovery and reporting modules themselves are operational and
 are not part of the simulation fingerprint inventory.
 """
 
 from __future__ import annotations
 
 # Reviewed edits: observational decorators, progress transport, and this digest
-# bridge; no scientific state, scheduling, persistence, RNG, or result-format changes.
+# bridge and semantic catalog publication; no scientific state, scheduling,
+# checkpoint persistence, RNG, or numerical result-format changes.
 _OBSERVATIONAL_REVISIONS = {
+    "analysis/pipeline.py": (
+        "a5bd774ccbfae39e10a4d8251fa11463155ac8e3b27ad8812a7be61d2f8c31bd",
+        "06df1e1844a8b1d3331b6c85fbb15f27c771a7328b5dc3f158bec9a69b56df51",
+    ),
+    "storage/experiment.py": (
+        "7a90349cd560b36a66a95c67d0a801204d3135f1a22547d4e81dbeb0fde8a913",
+        "001a4f83ab819b7d32ba14fb3e12f0c47b0247d96bb18c6906aded295bdb7ac6",
+    ),
     "execution/coordinator.py": (
         "3953ebbb374ce6e8d0b1b4f0f3bdc1100eaef8816390f8b9950ba3308ffa475c",
         "415420bf9df2ddef783c3d07efb5ace788b13b25479607d6ae73b16fa3a89423",

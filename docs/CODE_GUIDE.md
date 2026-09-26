@@ -419,6 +419,7 @@ the interaction visible; temporary directories isolate persisted artifacts.
 | [test_study.py](../tests/test_study.py) | Configuration validation, planner output, stable identities, and independent random streams. |
 | [test_components.py](../tests/test_components.py) | Component loading, aliases, constructor validation, and injected capabilities. |
 | [test_protocols.py](../tests/test_protocols.py) | Online feedback boundaries, offline fitting, and callable trials. |
+| [test_artifact_index.py](../tests/test_artifact_index.py) | Semantic catalog schema, concurrent publication, legacy inspection, regeneration, and optional files. |
 | [test_artifacts.py](../tests/test_artifacts.py) | Immutable instances and the saved-result interface. |
 | [test_data_generators.py](../tests/test_data_generators.py) | Saved CSV inputs, generated-data descriptions, and data cursor restoration. |
 | [test_bandits.py](../tests/test_bandits.py) | Reward generation, schedules, valid actions, and exact prefixes across extension. |
@@ -475,3 +476,12 @@ Before editing, find the focused tests for that area and read the associated
 invariants in [ARCHITECTURE.md](ARCHITECTURE.md). Keep class documentation focused
 on responsibility, owned state, and lifecycle. Add comments where the reason for
 an ordering or validation would otherwise be easy to miss.
+
+## External discovery catalog
+
+[`storage/artifact_index.py`](../src/experiments_wo_stress/storage/artifact_index.py)
+publishes the [versioned semantic contract](ARTIFACTS.md). Hooks in
+`ExperimentStore.publish_request`, `analysis.pipeline.analyze`, and compute
+summary regeneration emit identical catalogs without scanning optional outputs.
+Keep role locations synchronized with EWS storage owners when changing layout.
+Consumers outside EWS resolve roles instead of duplicating these paths.

@@ -209,6 +209,7 @@ serialization memory.
 
 ```text
 output/
+  artifacts.json                 semantic role catalog for external tools
   metadata.json                  active request and artifact schema
   config.resolved.yml             resolved configuration
   requests/                      retained requests
@@ -232,6 +233,14 @@ output/
     summary.json                  regenerated aggregate data
     summary.md                    concise human-readable report
 ```
+
+External tools consume [the semantic catalog](ARTIFACTS.md), not this layout
+diagram. `storage/artifact_index.py` owns discovery publication: fixed optional
+locations, explicit schema/version, deterministic atomic writes, and no tree
+inventory. Execution requests, analysis/plot workflows, and compute report
+regeneration publish it independently. Exact reviewed discovery hooks preserve
+existing scientific and analysis identities through `execution/compatibility.py`;
+unrecognized source changes still invalidate conservatively.
 
 The public storage readers validate and expose selected results; exact filenames
 within a generation are internal. `iter_completed_runs` yields run

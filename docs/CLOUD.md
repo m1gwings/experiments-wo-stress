@@ -243,3 +243,12 @@ Configure them as described in
 `--env EWS_DISCORD_WEBHOOK_URL` to `docker run`. Keep the webhook out of YAML,
 image arguments, and Git. Saved logs and artifacts remain the source of truth
 for execution state.
+
+## Semantic retrieval metadata
+
+Keep `OUTPUT/artifacts.json` with the uploaded output. External download tools
+should consume [the semantic artifact catalog](ARTIFACTS.md) for figures,
+analysis, and compute reports, not hardcode their internal EWS locations. The
+cloud-experiments selectors feature-detect that catalog; legacy uploads without
+it require a literal `--path` selected from `cloud-results ls RUN_ID`. Full pulls
+remain the archival option, and the cloud run manifest retains the exact EWS pin.

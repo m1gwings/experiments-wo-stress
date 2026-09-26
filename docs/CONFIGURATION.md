@@ -768,3 +768,12 @@ The [LLM guide](LLM_GUIDE.md) is a self-contained document for generating a pape
 experiment repository from these interfaces. The [cloud guide](CLOUD.md) shows how
 to install a pinned library revision in a container and keep output on durable
 storage, with no distributed scheduler or storage-backend change.
+
+## External artifact discovery
+
+No YAML option is needed: run/analyze/plot workflows publish `OUTPUT/artifacts.json`.
+Its explicit schema version and semantic roles let external tools find figures,
+analysis, compute reports, and raw runs without hardcoding internal paths. Optional
+roles can have no files. This does not change recording, checkpoint, or analysis
+settings. See [the artifact contract](ARTIFACTS.md) for fields, publication, and
+legacy outputs; `inspect` continues to read old outputs without this file.

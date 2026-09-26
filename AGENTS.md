@@ -24,6 +24,7 @@ contract, with real-paper validation still needed before declaring it stable.
 - `examples/offline_csv/`: stored-data example.
 - `tests/`: configuration, execution, persistence, analysis, and CLI checks.
 - `docs/CODE_GUIDE.md`: guided source reading order and a map of behavior-focused tests.
+- `docs/ARTIFACTS.md`: versioned semantic discovery contract for external tooling.
 - `docs/ARCHITECTURE.md`: component boundaries, reproducibility, and artifact contract.
 - `docs/CONFIGURATION.md`: configuration reference and extension guide.
 - `docs/LLM_GUIDE.md`: self-contained public authoring contract for use with a paper PDF.
@@ -106,6 +107,11 @@ contract, with real-paper validation still needed before declaring it stable.
   edits must continue to invalidate conservatively. Test clocks and system queries
   without requiring particular hardware. Reports cover observed output-directory
   history, never the entire research project's compute.
+- Keep external discovery in `storage/artifact_index.py` and `docs/ARTIFACTS.md`.
+  When changing output locations, update their semantic roles in the same change.
+  Publish deterministic optional locations without rescanning results or changing
+  scientific/cache identities. Cloud consumers must use this catalog, not copied
+  internal paths; old outputs remain readable without it.
 - Keep generated results, caches, environments, and build artifacts out of commits.
   Do not choose a license or publish a release without an explicit request.
 

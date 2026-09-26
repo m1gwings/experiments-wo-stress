@@ -20,6 +20,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any
 
+from ..storage.artifact_index import publish_artifact_index
 from ..storage.files import (
     StorageError,
     atomic_json,
@@ -432,6 +433,7 @@ def _regenerate_summary(root: Path) -> dict[str, Any]:
     }
     atomic_json(directory / "summary.json", summary)
     atomic_text(directory / "summary.md", _markdown(summary))
+    publish_artifact_index(root)
     return summary
 
 

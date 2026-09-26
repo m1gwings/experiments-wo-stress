@@ -284,6 +284,16 @@ outside that invocation's timings.
 | `ews inspect DIR` | Read stored status and validate completed artifacts without executing runs. |
 | `ews clean DIR --scope inactive` | Preview cleanup of retained artifacts. |
 
+## Semantic artifact discovery
+
+EWS writes `OUTPUT/artifacts.json`, a versioned catalog of semantic roles such as
+`figures`, `analysis`, `compute_report`, `compute`, and `runs`. External tooling
+should resolve these roles from the catalog instead of remembering internal
+paths. Optional locations may be absent; the catalog does not assert completion
+or inventory files. Existing outputs remain readable without it. See the
+[artifact discovery contract](docs/ARTIFACTS.md) for the schema and legacy cloud
+retrieval behavior. No configuration setting or storage migration is needed.
+
 ## Documentation and development
 
 - [Reading the code](docs/CODE_GUIDE.md) — where to start, how a run flows

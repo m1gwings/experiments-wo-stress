@@ -14,7 +14,9 @@ import numpy as np
 
 from ..builtins.metrics import PseudoRegretMetric, RealizedRegretMetric
 from ..components.loading import load_class
+from ..execution.compatibility import implementation_digest
 from ..storage import experiment as experiment_storage
+from ..storage.artifact_index import publish_artifact_index
 from ..storage.files import atomic_json, digest_file, fingerprint, read_json, write_arrays
 from ..study.config import analysis_points
 from ..study.planning import plan_runs
@@ -212,7 +214,7 @@ def _cached_metric(
     identity = cache_identity(
         "metric",
         implementation={
-            "pipeline": digest_file(Path(__file__)),
+            "pipeline": implementation_digest("analysis/pipeline.py", digest_file(Path(__file__))),
             "metrics": digest_file(Path(metric_definitions.__file__)),
         },
         result_revision=_result_revision(run_spec, results),
@@ -320,7 +322,7 @@ def analyze(config: ExperimentConfig, output_dir: str | Path) -> list[Summary]:
     entries.sort(key=lambda entry: (entry.metric, canonical_json(entry.labels), entry.run_id))
     aggregate_identity = cache_identity(
         "aggregate",
-        implementation=digest_file(Path(__file__)),
+        implementation=implementation_digest("analysis/pipeline.py", digest_file(Path(__file__))),
         options={"group_by": group_by, "uncertainty": uncertainty_kind, "points": points},
         metrics=[entry.identity() for entry in entries],
     )
@@ -342,6 +344,7 @@ def analyze(config: ExperimentConfig, output_dir: str | Path) -> list[Summary]:
         cache.current_path,
         {"aggregate_key": fingerprint(aggregate_identity), "completed_runs": completed},
     )
+    publish_artifact_index(output_dir)
     return summaries
 
 

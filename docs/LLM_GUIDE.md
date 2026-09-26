@@ -699,3 +699,24 @@ simulation modules are unavailable. Check foreign-library adapters against an
 uninterrupted trajectory. Inspect figures and confirm the paper's axes, comparator,
 units, and uncertainty definition. Pin dependencies and document unresolved
 scientific details before running an expensive study.
+
+## Semantic artifact discovery for external tooling
+
+EWS writes `OUTPUT/artifacts.json` when publishing an execution request, completing
+analysis (including plotting), or regenerating compute reports. It contains
+`schema: "experiments-wo-stress/artifacts"`, integer `schema_version: 1`, and an
+`artifacts` object mapping roles to `{path, kind, optional}` descriptors. Paths
+are literal canonical paths relative to that output root; traversal and absolute
+paths are invalid. `kind` is `file` or `directory`; `optional` is a boolean.
+Roles include `figures`, `analysis`, `compute_report`, `compute`, `runs`,
+`instances`, and `requests`; all current roles are optional and may be absent.
+`runs` includes trajectories, checkpoints, and per-run logs. The catalog is not a
+presence snapshot or completion marker and contains no credentials or timestamps.
+
+External tools must consume this catalog instead of hardcoding EWS paths. Reads
+of old outputs still work without it. In cloud-experiments, `cloud-results ls
+RUN_ID` lists stored paths; `pull RUN_ID --plots`, `--analysis`, and `--report`
+resolve the corresponding roles from the catalog. Legacy uploads without one
+require `--path RELATIVE_PATH`. Plain `pull RUN_ID` preserves the whole archive.
+Check the current cloud-experiments README/help for exact syntax. Schema support
+is detected per run; cloud provenance still records the exact EWS commit.

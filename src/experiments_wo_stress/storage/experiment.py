@@ -15,6 +15,7 @@ from typing import Any
 import numpy as np
 
 from ..study.specs import RunSpec
+from .artifact_index import publish_artifact_index
 from .files import (
     EXPERIMENT_SCHEMA_VERSION,
     SCHEMA_VERSION,
@@ -86,6 +87,7 @@ class ExperimentStore:
         atomic_json(self.requests_path / f"{request_id}.json", request)
         atomic_json(self.metadata_path, request)
         atomic_text(self.root / "config.resolved.yml", resolved_config)
+        publish_artifact_index(self.root)
 
     @contextmanager
     def lock(self) -> Iterator[None]:
