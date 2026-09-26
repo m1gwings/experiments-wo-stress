@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
@@ -116,6 +117,11 @@ def main(argv: list[str] | None = None) -> int:
                 action="store_true",
                 help="Show only final execution summaries and errors.",
             )
+            child.add_argument(
+                "--portable",
+                action="store_true",
+                help="Opt into portable CPU/NumPy checkpoint continuation; requires compatible runtime and packages.",
+            )
             child.add_argument("--workers", type=int, help="Override the local worker count.")
             child.add_argument(
                 "--max-steps", type=int, help="Pause each run after this many new steps."
@@ -163,6 +169,10 @@ def main(argv: list[str] | None = None) -> int:
             if args.command == "count-runs":
                 result = {"name": config.name, "runs": len(plan_runs(config))}
             elif args.command == "run":
+                if args.portable:
+                    config = replace(
+                        config, execution={**config.execution, "continuation": "portable_numpy"}
+                    )
                 result, exit_code = _run_study(
                     config,
                     args.output,

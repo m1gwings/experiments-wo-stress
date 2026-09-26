@@ -21,6 +21,7 @@ from ..study.config import ExperimentConfig
 from ..study.planning import plan_runs
 from ..study.specs import ComponentSpec, RunSpec
 from .compatibility import implementation_digest
+from .portability import portable_environment
 
 
 def preflight(specs: list[RunSpec]) -> dict[str, str]:
@@ -125,6 +126,11 @@ def collect_provenance(config: ExperimentConfig, sources: dict[str, str]) -> dic
         "pyyaml": yaml.__version__,
         "platform": platform.platform(),
     }
+    if config.execution.get("continuation") == "portable_numpy":
+        environment = portable_environment(config)
+        implementation["execution/portability.py"] = digest_file(
+            package / "execution/portability.py"
+        )
     revision = None
     dirty = None
     try:

@@ -10,6 +10,16 @@ that survives VM replacement and back it up
 separately. Provider prices and shared-CPU performance change, so check the
 chosen region and plan before committing to a long run.
 
+## Disposable VMs without containers
+
+The separate [cloud-experiments](https://github.com/m1gwings/cloud-experiments)
+workflow uses system Python and a venv, with automatic repeated `cloud-run`
+continuation through Object Storage and disposable VM attempts. It opts into
+EWS's [portable CPU/NumPy policy](PORTABILITY.md), recreates a saved environment
+lock, restores the complete output, and lets EWS select compatible variants.
+No Docker is needed for that workflow. The remaining sections describe the
+alternative standalone container deployment, whose strict defaults are unchanged.
+
 ## Prepare the study
 
 Keep the paper repository separate from the library. A container build needs the

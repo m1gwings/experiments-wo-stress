@@ -128,3 +128,13 @@ python -m build --no-isolation
 
 Run the checks relevant to a change; complete the full set for a release-sized
 implementation. See `docs/BUILD_WORKFLOW.md` for end-to-end example verification.
+
+## Portable workers
+
+Keep the explicit CPU/NumPy portability policy in `execution/portability.py` and
+its contract in `docs/PORTABILITY.md`. Strict compatibility remains the default.
+Do not remove scientific/source/input, package/runtime, architecture, recording,
+or checkpoint checks to make cloud continuation work. Unknown native/GPU and
+custom backends are unsupported. Cloud leases, persistence, and environment
+recreation belong to cloud-experiments; EWS remains authoritative for variants
+and checkpoints. Test portable resume against uninterrupted trajectories.

@@ -777,3 +777,17 @@ analysis, compute reports, and raw runs without hardcoding internal paths. Optio
 roles can have no files. This does not change recording, checkpoint, or analysis
 settings. See [the artifact contract](ARTIFACTS.md) for fields, publication, and
 legacy outputs; `inspect` continues to read old outputs without this file.
+
+## Portable continuation policy
+
+`execution.continuation` accepts `strict` (default) or `portable_numpy`.
+`ews run CONFIG --output OUTPUT --portable` selects `portable_numpy` for that
+invocation without editing YAML. CPU studies must use the built-in NumPy backend;
+GPU allocations and custom checkpoint backends are rejected. This policy keeps
+scientific/source/input, recording, budget, and checkpoint checks, but replaces
+kernel-specific environment identity with exact Python/ABI, numerical package,
+system family, architecture, byte-order, pointer-width, and libc compatibility.
+Hostname and core count do not invalidate portable checkpoints. Keep resolved
+paths stable. Strict and portable variants never silently mix. See
+[the full portability contract](PORTABILITY.md) before opting in; arbitrary
+native/GPU state and bitwise numerical portability are not guaranteed.

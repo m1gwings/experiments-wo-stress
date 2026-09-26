@@ -10,7 +10,9 @@ from __future__ import annotations
 
 # Reviewed edits: observational decorators, progress transport, and this digest
 # bridge and semantic catalog publication; no scientific state, scheduling,
-# checkpoint persistence, RNG, or numerical result-format changes.
+# checkpoint persistence, RNG, or numerical result-format changes. The portable
+# environment branch is separately opt-in and fingerprints its policy module;
+# strict-mode provenance retains its preceding compatibility digest.
 _OBSERVATIONAL_REVISIONS = {
     "analysis/pipeline.py": (
         "a5bd774ccbfae39e10a4d8251fa11463155ac8e3b27ad8812a7be61d2f8c31bd",
@@ -29,7 +31,7 @@ _OBSERVATIONAL_REVISIONS = {
         "c59620c438e444bf6bc21c60af190ace4433eee1d7a24f9d0a0c3335ca8e4d95",
     ),
     "execution/provenance.py": (
-        "0e8d8277585b297f7f77986750daa7097b081f86fd1a0c97d9272a6b2d1ab451",
+        "4a39808844f4734014827095a9fc3333bcece81e21bd6373f2800f6edca97cdd",
         "e31edfdb26117bdd868814bb1350056cef6666861cab2a95d4c4df823376d1a2",
     ),
     "analysis/figures.py": (

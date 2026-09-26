@@ -427,3 +427,17 @@ a new schema 2 output directory; no in-place conversion occurs. Distributed
 scheduling and arbitrary mid-function recovery are outside this local design.
 EWS does not provide a universal serializer for native framework objects;
 study-owned checkpoint backends implement those representations explicitly.
+
+## Portable CPU workers
+
+`execution/portability.py` owns the explicit `portable-numpy-v1` environment
+signature. `collect_provenance` chooses it only for `execution.continuation:
+portable_numpy`; the policy's own source digest is part of the implementation
+signature. The reviewed provenance digest bridge preserves strict-mode existing
+variants because that branch is unchanged. Portable mode remains distinguished
+by its environment and additional policy digest. All ordinary scientific,
+source/input, recording, budget, checkpoint and variant validation still applies.
+See [PORTABILITY.md](PORTABILITY.md) for exact fields and unsupported backends.
+External cloud tooling restores a complete verified output tree and recreates
+its environment before EWS selects variants. Cloud attempts, provider locks,
+and object storage publication remain outside EWS.

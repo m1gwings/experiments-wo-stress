@@ -344,7 +344,11 @@ def validate_checkpoint_backend(value: Any) -> dict[str, Any]:
 
 def _execution_settings(value: Any) -> dict[str, Any]:
     execution = _mapping(value, "execution")
-    _keys(execution, set(_EXECUTION) | {"gpu_ids", "checkpoint_backend"}, "execution")
+    _keys(
+        execution, set(_EXECUTION) | {"gpu_ids", "checkpoint_backend", "continuation"}, "execution"
+    )
+    if execution.get("continuation", "strict") not in {"strict", "portable_numpy"}:
+        raise ValueError("execution.continuation must be strict or portable_numpy")
     execution = {**_EXECUTION, **execution}
     for key in ("workers", "keep_checkpoints"):
         _integer(execution[key], f"execution.{key}", 1)

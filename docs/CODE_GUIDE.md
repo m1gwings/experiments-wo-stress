@@ -485,3 +485,11 @@ publishes the [versioned semantic contract](ARTIFACTS.md). Hooks in
 summary regeneration emit identical catalogs without scanning optional outputs.
 Keep role locations synchronized with EWS storage owners when changing layout.
 Consumers outside EWS resolve roles instead of duplicating these paths.
+
+## Portable continuation
+
+Read `execution/portability.py` with `execution/provenance.py` for the opt-in CPU
+NumPy compatibility policy. `tests/test_portability.py` exercises checkpoint
+reuse on replacement hosts and conservative invalidation. See
+[PORTABILITY.md](PORTABILITY.md) for the public contract; cloud persistence and
+environment installation are owned by the separate cloud-experiments repository.

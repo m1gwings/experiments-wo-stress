@@ -308,3 +308,14 @@ retrieval behavior. No configuration setting or storage migration is needed.
 - [Project brief](docs/PROJECT_BRIEF.md) — goals and scope.
 - [Contributing](CONTRIBUTING.md) and
   [development workflow](docs/BUILD_WORKFLOW.md) — working on the library.
+
+## Disposable cloud workers
+
+CPU studies using NumPy checkpoints can opt into `ews run CONFIG --output OUTPUT
+--portable` (or YAML `execution.continuation: portable_numpy`). Matching software,
+architecture, scientific source, inputs, and stable paths allow checkpoint reuse
+on replacement VMs. Strict compatibility remains the default; GPU/custom checkpoint
+backends are rejected in portable mode. See [portable continuation](docs/PORTABILITY.md)
+for the precise guarantees and limitations. Cloud deployment, environment locks,
+and automatic repeated `cloud-run` continuation belong to
+[cloud-experiments](https://github.com/m1gwings/cloud-experiments).

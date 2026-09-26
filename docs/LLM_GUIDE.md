@@ -720,3 +720,27 @@ resolve the corresponding roles from the catalog. Legacy uploads without one
 require `--path RELATIVE_PATH`. Plain `pull RUN_ID` preserves the whole archive.
 Check the current cloud-experiments README/help for exact syntax. Schema support
 is detected per run; cloud provenance still records the exact EWS commit.
+
+## Disposable CPU worker continuation
+
+Use `ews run CONFIG --output OUTPUT --portable`, or set
+`execution.continuation: portable_numpy`, only for CPU studies using the built-in
+NumPy checkpoint backend and supported serializable component/RNG state. The
+default is `strict`; switching policies creates separate retained variants.
+Portable compatibility requires exact Python version/implementation/ABI, OS
+family, architecture, byte order, pointer width, libc, and installed package
+versions. Hostname, kernel release, and core count may change. Scientific specs,
+tracked source and declared inputs/dependencies, recording, budget rules, and
+checkpoint validation remain authoritative. Keep resolved source/input/output
+paths stable and declare helper dependencies. Changed compatible-work identity
+selects new variants; never force incompatible checkpoint loading.
+
+GPU allocations and custom checkpoint backends are rejected in portable mode.
+This is not a promise of generic native/GPU serialization or bitwise results
+across CPU/BLAS/wheel builds. The study must support its own state restoration.
+The separate cloud-experiments tooling owns environment recreation, complete
+output restore/persistence, and single-writer VM leases. Repeated `cloud-run`
+continues the logical study; `--fresh` starts an independent lineage. EWS owns
+all checkpoint and completed-run decisions. SIGINT/SIGTERM requests a checkpoint
+at a safe protocol boundary; forced termination can lose work since the previous
+committed checkpoint. Preserve the entire output tree between attempts.
