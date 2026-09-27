@@ -232,9 +232,13 @@ def prune_trajectory(root: Path, storage_id: str, spec: RunSpec, metrics: dict) 
             "metrics": metrics,
         }
         atomic_json(directory / "trajectory.json", {**receipt, "sha256": fingerprint(receipt)})
-    for path in (directory / "results").glob("*.npz"):
-        path.unlink()
-    sync_directory(directory / "results")
+    results = directory / "results"
+    # A sealed recovery snapshot omits the empty results directory for pruned runs.
+    # Replaying an already published pruning receipt still has no chunks to delete.
+    if results.exists():
+        for path in results.glob("*.npz"):
+            path.unlink()
+        sync_directory(results)
 
 
 def rematerialize_trajectory(directory: Path) -> None:

@@ -20,6 +20,7 @@ from experiments_wo_stress.execution.worker import RunSession
 from experiments_wo_stress.plotting import plot
 from experiments_wo_stress.storage import StorageError, atomic_json, fingerprint, read_json
 from experiments_wo_stress.storage.experiment import inspect_experiment
+from experiments_wo_stress.storage.recovery import create_snapshot, restore_snapshot
 from experiments_wo_stress.storage.trajectories import (
     pruning_history,
     pruning_receipt,
@@ -228,6 +229,21 @@ class DependencyReuseTests(_PipelineCase):
         self.assertEqual((report.completed, report.skipped), (0, 2))
         self.assertFalse(kinds)
         self.assertEqual(inspect_experiment(output)["counts"]["completed"], 2)
+
+    def test_restored_pruned_output_reuses_completed_pipeline(self) -> None:
+        config = self.load_study_config(self.pipeline_settings())
+        output = self.root / "output"
+        report, _ = self.run_with_task_counts(config, output)
+        self.assertEqual(report.completed, 2)
+        snapshot = create_snapshot(output, self.root / "snapshot")
+        restored = restore_snapshot(snapshot, self.root / "restored")
+        self.assert_pruned(restored)
+        for directory in self.variants(restored):
+            self.assertFalse((directory / "results").exists())
+        report, kinds = self.run_with_task_counts(config, restored)
+        self.assertEqual((report.completed, report.skipped), (0, 2))
+        self.assertFalse(kinds)
+        self.assert_pruned(restored)
 
     def test_figure_and_aggregation_changes_stop_at_their_retained_inputs(self) -> None:
         settings = self.pipeline_settings()

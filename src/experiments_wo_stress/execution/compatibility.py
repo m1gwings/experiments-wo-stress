@@ -38,6 +38,12 @@ _OBSERVATIONAL_REVISIONS = {
         "02d4bd1df72b3f5d53dbab25dcfde1392984e5c3ad2c17b2fd88f17719334a0c",
         "5a63ebaa2b911919155b346c1898260af7f3e844148914361a9f9ac77b1b6583",
     ),
+    # Retrying a pruning receipt after snapshot restore only skips fsync of an
+    # already absent, intentionally empty results directory.
+    "storage/trajectories.py": (
+        "e6fa4f80a52ca460ae814946ac7be28a74bab48fd700bae089fa90350d429407",
+        "1845acf3e62ac0b324323056f6612f759a799e525e4abb11cc09241492614dea",
+    ),
 }
 
 
