@@ -29,6 +29,8 @@ def preflight(specs: list[RunSpec]) -> dict[str, str]:
     sources: dict[str, str] = {}
     classes: dict[str, Any] = {}
     hashed: dict[str, str] = {}
+    signatures: dict[str, Any] = {}
+    validated: set[str] = set()
 
     def hash_source(label: str, path: str) -> None:
         if path not in hashed:
@@ -49,16 +51,22 @@ def preflight(specs: list[RunSpec]) -> dict[str, str]:
                     hash_source(component.type, source)
                 classes[component.type] = cls
             cls = classes[component.type]
-            try:
-                signature = inspect.signature(cls)
-            except ValueError:
-                signature = None
+            key = fingerprint(component.to_dict())
+            if key in validated:
+                continue
+            if component.type not in signatures:
+                try:
+                    signatures[component.type] = inspect.signature(cls)
+                except ValueError:
+                    signatures[component.type] = None
+            signature = signatures[component.type]
             if signature is not None:
                 kwargs = {"rng": None, **component.params}
                 for injected in ("instance", "logger"):
                     if injected in signature.parameters:
                         kwargs[injected] = None
                 signature.bind(**kwargs)
+            validated.add(key)
         if spec.data.type in {"csv", "experiments_wo_stress.data:CSVDataGenerator"}:
             path = spec.data.params["path"]
             hash_source(f"input:{path}", path)
@@ -102,12 +110,14 @@ def collect_provenance(config: ExperimentConfig, sources: dict[str, str]) -> dic
         "builtins/protocols.py",
         "execution/coordinator.py",
         "execution/worker.py",
+        "execution/scheduler.py",
         "execution/provenance.py",
         "execution/resources.py",
         "storage/models.py",
         "storage/files.py",
         "storage/run.py",
         "storage/experiment.py",
+        "storage/trajectories.py",
     )
     implementation = {
         name: implementation_digest(name, digest_file(package / name))
@@ -166,8 +176,18 @@ def collect_provenance(config: ExperimentConfig, sources: dict[str, str]) -> dic
     }
 
 
-def _component_sources(component: ComponentSpec) -> dict[str, str]:
+def _component_sources(
+    component: ComponentSpec, hashed: dict[Path, str] | None = None
+) -> dict[str, str]:
     """Fingerprint defining/base modules and explicitly declared helper/input files."""
+    hashed = {} if hashed is None else hashed
+
+    def digest(path: Path) -> str:
+        path = path.resolve()
+        if path not in hashed:
+            hashed[path] = digest_file(path)
+        return hashed[path]
+
     cls = resolve_type(component.type)
     sources = {}
     for base in getattr(cls, "__mro__", (cls,)):
@@ -178,21 +198,21 @@ def _component_sources(component: ComponentSpec) -> dict[str, str]:
         except TypeError:
             source = None
         if source:
-            sources[f"module:{base.__module__}"] = digest_file(Path(source))
+            sources[f"module:{base.__module__}"] = digest(Path(source))
             for dependency in getattr(base, "dependency_files", ()):
                 path = (Path(source).parent / dependency).resolve()
-                sources[f"dependency:{path}"] = digest_file(path)
+                sources[f"dependency:{path}"] = digest(path)
     for dependency in getattr(component, "dependencies", ()):
         path = Path(dependency).resolve()
-        sources[f"dependency:{path}"] = digest_file(path)
+        sources[f"dependency:{path}"] = digest(path)
     if component.type in {"csv", "experiments_wo_stress.data:CSVDataGenerator"}:
         path = Path(component.params["path"])
-        sources[f"input:{path}"] = digest_file(path)
+        sources[f"input:{path}"] = digest(path)
     if component.type in {"trial", "experiments_wo_stress.protocols:TrialProtocol"}:
         function = resolve_type(component.params["function"])
         source = inspect.getsourcefile(function)
         if source:
-            sources[f"function:{component.params['function']}"] = digest_file(Path(source))
+            sources[f"function:{component.params['function']}"] = digest(Path(source))
     if component.type in {"gymnasium", "experiments_wo_stress.settings:GymnasiumAdapter"}:
         import importlib.metadata
 
@@ -206,10 +226,10 @@ def _component_sources(component: ComponentSpec) -> dict[str, str]:
                     continue
                 source = inspect.getsourcefile(base)
                 if source:
-                    sources[f"adapter:{target}:{base.__module__}"] = digest_file(Path(source))
+                    sources[f"adapter:{target}:{base.__module__}"] = digest(Path(source))
                     for dependency in getattr(base, "dependency_files", ()):
                         path = (Path(source).parent / dependency).resolve()
-                        sources[f"dependency:{path}"] = digest_file(path)
+                        sources[f"dependency:{path}"] = digest(path)
             package = target.split(":", 1)[0].split(".", 1)[0]
             try:
                 sources[f"package:{package}"] = importlib.metadata.version(package)
@@ -249,17 +269,21 @@ def prepare_request(
     if recording["fields"] is not None:
         recording["fields"] = sorted(recording["fields"])
     source_cache = {}
+    hashed: dict[Path, str] = {}
+    extension_support: dict[str, bool] = {}
     for spec in specs:
         sources = {}
         extendable = spec.budget_steps is not None
         for component in (spec.algorithm, spec.data, spec.protocol):
             key = fingerprint(component.to_dict())
             if key not in source_cache:
-                source_cache[key] = _component_sources(component)
+                source_cache[key] = _component_sources(component, hashed)
             sources.update(source_cache[key])
-            extendable = extendable and bool(
-                getattr(resolve_type(component.type), "supports_extension", False)
-            )
+            if component.type not in extension_support:
+                extension_support[component.type] = bool(
+                    getattr(resolve_type(component.type), "supports_extension", False)
+                )
+            extendable = extendable and extension_support[component.type]
         scientific = spec.to_dict()
         scientific.pop("budget_steps", None)
         code_signature = fingerprint(

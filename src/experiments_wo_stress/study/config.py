@@ -8,8 +8,10 @@ import re
 import sys
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from datetime import timezone, tzinfo
 from pathlib import Path
 from typing import Any
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 import yaml
 
@@ -28,7 +30,13 @@ _EXECUTION = {
     "log_max_bytes": 2 * 1024 * 1024,
     "log_backups": 2,
 }
-_RECORDING = {"every_steps": 1, "fields": None, "buffer_bytes": 16 * 1024 * 1024}
+_RECORDING = {
+    "every_steps": 1,
+    "fields": None,
+    "buffer_bytes": 16 * 1024 * 1024,
+    "retention": "keep",
+}
+_DISPLAY = {"timezone": "UTC"}
 _CSV_TYPES = {"csv", "experiments_wo_stress.data:CSVDataGenerator"}
 
 
@@ -79,8 +87,9 @@ class ExperimentConfig:
 
     ``load_config`` validates YAML, applies defaults, and resolves file paths
     before constructing this value. ``runs`` describes scientific groups;
-    execution, recording, analysis, and notification options control their later
-    stages. ``source_dir`` supplies import/path context and is not serialized.
+    execution, recording, and analysis describe the requested work. Notification
+    and display settings observe that work. ``source_dir`` supplies import/path
+    context and is not serialized.
     """
 
     name: str
@@ -91,6 +100,7 @@ class ExperimentConfig:
     analysis: dict[str, Any] = field(default_factory=dict)
     source_dir: Path = field(default_factory=Path.cwd)
     notifications: dict[str, Any] = field(default_factory=dict)
+    display: dict[str, Any] = field(default_factory=lambda: dict(_DISPLAY))
 
     def to_dict(self) -> dict[str, Any]:
         """Copy the effective configuration for resolved YAML and provenance."""
@@ -103,6 +113,7 @@ class ExperimentConfig:
                 "recording": self.recording,
                 "analysis": self.analysis,
                 "notifications": self.notifications,
+                "display": self.display,
             }
         )
 
@@ -385,6 +396,8 @@ def _recording_settings(value: Any) -> dict[str, Any]:
     recording = _mapping(value, "recording")
     _keys(recording, set(_RECORDING), "recording")
     recording = {**_RECORDING, **recording}
+    if recording["retention"] not in ("keep", "until_analyzed"):
+        raise ValueError("recording.retention must be keep or until_analyzed")
     for key in ("every_steps", "buffer_bytes"):
         _integer(recording[key], f"recording.{key}", 1)
     fields = recording["fields"]
@@ -396,6 +409,34 @@ def _recording_settings(value: Any) -> dict[str, Any]:
         if len(set(fields)) != len(fields):
             raise ValueError("recording.fields must not contain duplicate names")
     return recording
+
+
+def resolve_display_timezone(display: Mapping[str, Any], override: str | None = None) -> tzinfo:
+    """Resolve CLI override, configured IANA name, then UTC for terminal estimates.
+
+    This setting is observational; scientific identities and persisted timestamps
+    do not use it. Resolution never depends on the host machine's local timezone.
+    """
+    name = override if override is not None else display.get("timezone", "UTC")
+    _text(name, "display.timezone")
+    try:
+        return ZoneInfo(name)
+    except (ZoneInfoNotFoundError, ValueError) as exc:
+        if name == "UTC":
+            # UTC needs no external timezone database, including on Windows.
+            return timezone.utc
+        raise ValueError(
+            f"Invalid display.timezone {name!r}; use an installed IANA timezone such as "
+            "Europe/Rome or UTC"
+        ) from exc
+
+
+def _display_settings(value: Any) -> dict[str, Any]:
+    display = _mapping(value, "display")
+    _keys(display, set(_DISPLAY), "display")
+    display = {**_DISPLAY, **display}
+    resolve_display_timezone(display)
+    return display
 
 
 def analysis_points(analysis: Mapping[str, Any]) -> int | None:
@@ -416,7 +457,7 @@ def load_config(path: str | Path) -> ExperimentConfig:
     raw = _mapping(raw, "experiment")
     _keys(
         raw,
-        {"name", "seed", "runs", "execution", "recording", "analysis", "notifications"},
+        {"name", "seed", "runs", "execution", "recording", "analysis", "notifications", "display"},
         "experiment",
     )
     _json_value(raw, "experiment")
@@ -434,8 +475,9 @@ def load_config(path: str | Path) -> ExperimentConfig:
     _keys(analysis, {"points", "metrics", "aggregator", "figures"}, "analysis")
     analysis = {**analysis, "points": analysis_points(analysis)}
     notifications = validate_notifications(raw.get("notifications", {}))
+    display = _display_settings(raw.get("display", {}))
     config = ExperimentConfig(
-        name, seed, groups, execution, recording, analysis, path.parent, notifications
+        name, seed, groups, execution, recording, analysis, path.parent, notifications, display
     )
     source = str(path.parent)
     if source not in sys.path:

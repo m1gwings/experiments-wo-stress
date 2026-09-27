@@ -39,8 +39,8 @@ ews run examples/sequential_study/experiment.yml --output outputs/bandits
 ews inspect outputs/bandits
 ```
 
-`run` executes the study and, after successful completion, produces the configured
-analysis; figures appear under `outputs/bandits/analysis/figures/`. Running it
+`run` executes the study and produces configured derivations as their inputs become
+available; figures appear under `outputs/bandits/analysis/figures/`. Running it
 again reuses compatible completed work. To preview the size first, the optional
 `ews count-runs examples/sequential_study/experiment.yml` reports 120 runs.
 You do not need to invoke `count-runs` before `run`.
@@ -57,7 +57,7 @@ ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --
 ```
 
 The first command pauses each run after 300 steps. The second continues the runs
-with two workers and produces analysis and figures once all runs complete.
+with two workers; metrics, aggregates, and figures run as their dependencies complete.
 The [configuration guide](../../docs/CONFIGURATION.md#budget-continuation-and-retained-artifacts)
 explains when a run can continue and how other changes affect reuse.
 
@@ -84,3 +84,7 @@ For a different feedback rule, select
 output. It clips the reward shown to the learner and offers `raw_reward` as an
 additional recordable field. Whether Gaussian-mean pseudo-regret remains the
 right comparator for that changed learning problem is a scientific decision.
+
+For disposable trajectories, select `recording.retention: until_analyzed`; full
+per-run metrics remain available after raw chunks are pruned. The default `keep`
+is convenient for trying new metrics without rematerializing simulations.

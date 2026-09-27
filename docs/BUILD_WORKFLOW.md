@@ -60,8 +60,8 @@ ews run examples/sequential_study/experiment.yml --output outputs/verification
 ews run examples/offline_csv/experiment.yml --output outputs/offline-verification
 ```
 
-The paused run should resume with two workers and then produce its configured
-analysis and figures. The next invocation should reuse completed runs and
+The paused run should resume with two workers and produce its configured
+analysis and figures as dependencies become ready. The next invocation should reuse completed runs and
 analysis; the offline run should also produce its configured summaries.
 Inspect logs and figures when those outputs are affected. To test extension,
 increase `budget.steps` in a temporary configuration beside its `experiment_code/`

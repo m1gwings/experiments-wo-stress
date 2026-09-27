@@ -9,7 +9,8 @@ import threading
 import time
 from collections import deque
 from dataclasses import dataclass, replace
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, tzinfo
+from datetime import timezone as datetime_timezone
 from queue import Empty, Full
 from statistics import median
 from typing import TYPE_CHECKING, Any
@@ -21,11 +22,14 @@ from rich.progress_bar import ProgressBar
 from rich.table import Table
 from rich.text import Text
 
+from ..study.config import resolve_display_timezone
+
 if TYPE_CHECKING:
     from ..study.specs import RunSpec
 
 _INTERVAL = 0.25
 _ACTIVE = {"starting", "running"}
+_DERIVED_KINDS = ("METRIC", "AGG", "FIGURE")
 _STYLES = {
     "starting": "yellow",
     "running": "cyan",
@@ -38,11 +42,11 @@ _STYLES = {
 
 @dataclass
 class WorkerProgress:
-    """Snapshot one process's current run; timestamps use the shared monotonic clock.
+    """Snapshot one process's current task using the shared monotonic clock.
 
     The initial completed count is taken after restoration, so ETA measures only
     this attempt's work. Terminal snapshots freeze elapsed time. The parent keeps
-    one snapshot per process, replacing it when that worker starts another run.
+    one snapshot per process, replacing it when that worker starts another task.
     """
 
     pid: int
@@ -54,6 +58,8 @@ class WorkerProgress:
     total: int | None = None
     initial: int | None = None
     baseline_at: float = 0.0
+    kind: str = "SIM"
+    subject: str = ""
 
     @property
     def fraction(self) -> float | None:
@@ -72,7 +78,7 @@ class WorkerProgress:
         return min(1.0, max(0.0, (self.completed - self.initial) / (self.total - self.initial)))
 
     def elapsed(self, now: float) -> float:
-        """Return wall time since this worker began the run, including setup."""
+        """Return wall time since this worker began the task, including setup."""
         return max(0.0, (now if self.status in _ACTIVE else self.updated) - self.started)
 
     def eta(self, now: float) -> float | None:
@@ -89,10 +95,20 @@ class WorkerProgress:
 class ProgressReporter:
     """Send small, throttled snapshots from a worker; never render or block on the UI."""
 
-    def __init__(self, queue: Any, run_id: str, budget: int | None) -> None:
+    def __init__(
+        self,
+        queue: Any,
+        run_id: str,
+        budget: int | None,
+        *,
+        kind: str = "SIM",
+        subject: str = "",
+    ) -> None:
         self.queue = queue
         now = time.monotonic()
-        self.state = WorkerProgress(os.getpid(), run_id, now, now, total=budget)
+        self.state = WorkerProgress(
+            os.getpid(), run_id, now, now, total=budget, kind=kind, subject=subject
+        )
         self.next_update = now
         self._send()
 
@@ -138,6 +154,22 @@ class ProgressReporter:
         self.state.updated = time.monotonic()
         self._send()
 
+    def advance(self, completed: int, total: int | None = None, *, force: bool = False) -> None:
+        """Observe meaningful task units; atomic derivations may remain indeterminate."""
+        now = time.monotonic()
+        if not force and now < self.next_update:
+            return
+        self.next_update = now + _INTERVAL
+        self.state.completed = completed
+        if total is not None:
+            self.state.total = total
+        if self.state.initial is None:
+            self.state.initial = 0
+            self.state.baseline_at = self.state.started
+        self.state.status = "running"
+        self.state.updated = now
+        self._send()
+
 
 def _label(value: str) -> str:
     return re.sub(r"[\x00-\x1f\x7f-\x9f]", " ", value).strip()
@@ -171,11 +203,22 @@ class TerminalProgress:
     """
 
     def __init__(
-        self, name: str, workers: int, *, quiet: bool = False, console: Console | None = None
+        self,
+        name: str,
+        workers: int,
+        *,
+        quiet: bool = False,
+        console: Console | None = None,
+        timezone: str | tzinfo = "UTC",
     ) -> None:
         self.name = _label(name)
         self.workers = workers
         self.quiet = quiet
+        self.timezone = (
+            timezone
+            if isinstance(timezone, tzinfo)
+            else resolve_display_timezone({}, override=timezone)
+        )
         self.console = console or Console(stderr=True, highlight=False)
         self.interactive = bool(self.console.file.isatty() and not self.console.is_dumb_terminal)
         if not self.interactive:
@@ -191,6 +234,12 @@ class TerminalProgress:
         )
         self.total = 0
         self.active: dict[str, RunSpec] = {}
+        self.tasks: dict[str, tuple[str, str]] = {}
+        self.task_totals = dict.fromkeys(_DERIVED_KINDS, 0)
+        self.task_counts = {
+            kind: dict.fromkeys(("completed", "skipped", "failed", "paused"), 0)
+            for kind in _DERIVED_KINDS
+        }
         self.rows: dict[int, WorkerProgress] = {}
         self.names: dict[int, str] = {}
         self.counts = dict.fromkeys(("completed", "skipped", "failed", "paused"), 0)
@@ -228,6 +277,49 @@ class TerminalProgress:
         with self._lock:
             self.active[spec.run_id] = spec
 
+    def configure_tasks(self, totals: dict[str, int]) -> None:
+        """Observe the derived-task plan without interpreting its dependencies."""
+        with self._lock:
+            for kind, count in totals.items():
+                if kind not in _DERIVED_KINDS or count < 0:
+                    raise ValueError(f"Invalid progress task total: {kind}={count}")
+                self.task_totals[kind] = count
+
+    def reuse_tasks(self, counts: dict[str, int]) -> None:
+        """Count tasks satisfied by retained artifacts without fabricating worker activity."""
+        with self._lock:
+            for kind, count in counts.items():
+                if kind not in _DERIVED_KINDS or count < 0:
+                    raise ValueError(f"Invalid reused task count: {kind}={count}")
+                self.task_counts[kind]["skipped"] += count
+
+    def task_started(self, task_id: str, kind: str, subject: str) -> None:
+        """Register a derived task before its worker emits optional snapshots."""
+        if kind not in _DERIVED_KINDS:
+            raise ValueError(f"Unknown progress task kind: {kind}")
+        with self._lock:
+            self.tasks[task_id] = (kind, _label(subject))
+
+    def task_finished(
+        self, task_id: str, status: str = "completed", error: str | None = None
+    ) -> None:
+        """Record an authoritative derived outcome independently of simulation counts."""
+        with self._lock:
+            self._drain()
+            kind, subject = self.tasks.pop(task_id)
+            self.task_counts[kind][status] += 1
+            now = time.monotonic()
+            for row in self.rows.values():
+                if row.run_id == task_id and row.kind == kind:
+                    row.status, row.updated = status, now
+            if error:
+                self.errors[task_id] = error
+                self.console.print(
+                    Text(f"[ews] Failed {kind} {subject}: {_label(error)}", style="red")
+                )
+                if self._live:
+                    self._live.update(self.render(now), refresh=True)
+
     def _drain(self) -> None:
         if self.queue is None:
             return
@@ -236,6 +328,11 @@ class TerminalProgress:
                 row = self.queue.get_nowait()
             except (Empty, OSError, ValueError):
                 break
+            task = self.tasks.get(row.run_id)
+            if task is not None:
+                self.rows[row.pid] = row
+                row.kind, self.names[row.pid] = task
+                continue
             spec = self.active.get(row.run_id)
             if spec is None:
                 continue  # A delayed snapshot must not resurrect finished work.
@@ -272,6 +369,10 @@ class TerminalProgress:
 
     def remaining(self, now: float) -> float | None:
         """Estimate backlog from observed run durations and available concurrency."""
+        if self.tasks or any(
+            self.task_totals[kind] > sum(self.task_counts[kind].values()) for kind in _DERIVED_KINDS
+        ):
+            return None  # Simulation throughput does not estimate heterogeneous derivations.
         if not self.active and not self.queued:
             return 0.0 if self.total else None
         if not self.durations or now - self.started < 5:
@@ -291,33 +392,56 @@ class TerminalProgress:
         if not self.total:
             return f"preparing study | elapsed {_duration(now - self.started)}"
         done = self.counts["completed"] + self.counts["skipped"]
-        return (
-            f"{done}/{self.total} completed | {len(self.active)} running | "
+        summary = (
+            f"{done}/{self.total} completed | {len(self.active) + len(self.tasks)} running | "
             f"{self.queued} queued | {self.counts['failed']} failed | "
             f"elapsed {_duration(now - self.started)} | remaining {_estimate(self.remaining(now))}"
         )
+        return summary + self._task_summary()
+
+    def _task_summary(self) -> str:
+        return "".join(
+            f" | {kind} {self.task_counts[kind]['completed'] + self.task_counts[kind]['skipped']}"
+            f"/{total}"
+            + (
+                f" ({self.task_counts[kind]['failed']} failed)"
+                if self.task_counts[kind]["failed"]
+                else ""
+            )
+            for kind, total in self.task_totals.items()
+            if total
+        )
+
+    def _finish_estimate(self, remaining: float | None) -> str:
+        if remaining is None:
+            return "estimating…"
+        finish = datetime.now(datetime_timezone.utc) + timedelta(seconds=remaining)
+        return finish.astimezone(self.timezone).strftime("~%H:%M %Z")
 
     def render(self, now: float) -> Group:
         """Build a width-aware view of worker rows and study counters."""
         heading = Panel(Text(self.name), title="Experiments W/O Stress", border_style="blue")
         if not self.total:
             return Group(heading, Text("Preparing study…", style="dim"))
-        table = Table(expand=True, box=None, padding=(0, 1))
         narrow = self.console.width < 60
-        for title, width in (
+        table = Table(expand=True, box=None, padding=(0, 0 if narrow else 1))
+        columns = [
             ("W" if narrow else "Worker", 1 if narrow else 6),
-            ("Run", None),
+            ("Task", 6),
+            ("Subject", None),
             ("%" if narrow else "Progress", 16 if self.console.width >= 90 else 4 if narrow else 8),
             ("Time" if narrow else "Elapsed", 5 if narrow else 8),
-            ("ETA", 5 if narrow else 7),
             ("Status", 9),
-        ):
+        ]
+        if not narrow:
+            columns.insert(-1, ("ETA", 7))
+        for title, width in columns:
             table.add_column(
                 title,
                 width=width,
                 no_wrap=True,
                 overflow="ellipsis",
-                ratio=1 if title == "Run" else None,
+                ratio=1 if title == "Subject" else None,
             )
         for index, (pid, row) in enumerate(self.rows.items()):
             fraction = row.fraction
@@ -336,26 +460,26 @@ class TerminalProgress:
                     ),
                     Text(percent),
                 )
-            table.add_row(
+            cells = [
                 str(index),
+                row.kind,
                 Text(row.run_id[:8] if narrow else self.names[pid]),
                 progress,
                 _duration(row.elapsed(now)),
-                "—" if row.eta(now) is None else _estimate(row.eta(now)),
                 Text(row.status, style=_STYLES[row.status]),
-            )
+            ]
+            if not narrow:
+                cells.insert(-1, "—" if row.eta(now) is None else _estimate(row.eta(now)))
+            table.add_row(*cells)
         remaining = self.remaining(now)
-        finish = (
-            "estimating…"
-            if remaining is None
-            else (datetime.now() + timedelta(seconds=remaining)).strftime("~%H:%M")
-        )
+        finish = self._finish_estimate(remaining)
         return Group(
             heading,
             table,
             Text(
                 f"Runs  {self.counts['completed'] + self.counts['skipped']}/{self.total} completed | "
-                f"{len(self.active)} running | {self.queued} queued | {self.counts['failed']} failed"
+                f"{len(self.active) + len(self.tasks)} running | {self.queued} queued | "
+                f"{self.counts['failed']} failed" + self._task_summary()
             ),
             Text(
                 f"Elapsed {_duration(now - self.started)} | Remaining {_estimate(remaining)} | "
@@ -400,21 +524,28 @@ class TerminalProgress:
                 self.queue.cancel_join_thread()
         report = self._report or {}
         pending = report.get("pending", self.queued + len(self.active))
+        pending_tasks = report.get("pending_tasks", 0)
         status = (
             "Interrupted"
             if exc_type is KeyboardInterrupt
             else "Aborted"
             if exc_type
             else "Failed"
-            if self.counts["failed"]
-            else ("Paused/interrupted" if pending or self.counts["paused"] else "Completed")
+            if self.counts["failed"] or any(c["failed"] for c in self.task_counts.values())
+            else (
+                "Paused/interrupted"
+                if pending or pending_tasks or self.counts["paused"] or report.get("interrupted")
+                else "Completed"
+            )
         )
         text = (
             f"[ews] {status}: {self.counts['completed']} completed, "
             f"{self.counts['skipped']} reused, {self.counts['failed']} failed, "
             f"{self.counts['paused']} paused, {pending} pending | "
-            f"elapsed {_duration(time.monotonic() - self.started)}"
+            f"elapsed {_duration(time.monotonic() - self.started)}" + self._task_summary()
         )
+        if pending_tasks:
+            text += f" | {pending_tasks} derived tasks pending"
         self.console.print(
             Text(text, style="green" if status == "Completed" else "yellow"), soft_wrap=True
         )

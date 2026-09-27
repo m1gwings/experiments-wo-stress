@@ -55,12 +55,24 @@ decides completed-run reuse, compatible checkpoints, and new variants. A cloud
 environment lock mismatch fails setup before loading checkpoints; use `--fresh`
 deliberately when that environment cannot be recreated.
 
-Object Storage is a backup of complete output files; EWS executes on a VM's
-ordinary local filesystem. Copy the entire output tree, including checkpoints,
-instances, results, metadata, and analysis, after stopping the writer. Verify
-checksums before execution and never allow two writers to share one lineage.
-Use the [semantic artifact catalog](ARTIFACTS.md) for result selection, not copied
-knowledge of EWS internal paths.
+Object Storage holds recovery snapshots; EWS executes on a VM's ordinary local
+filesystem. EWS provides `create_snapshot`, `validate_snapshot`, and
+`restore_snapshot` from `experiments_wo_stress.storage` for wrappers to use.
+The [versioned recovery contract](CLOUD.md#versioned-recovery-snapshots) defines a
+sealed checksum inventory and remote commit marker. It requires a stopped writer
+and EWS's exclusive output lock, excludes unpublished objects, preserves valid
+checkpoint predecessors, and rejects unsupported contract versions. Restore to a
+new directory and let normal EWS validation select compatible state. Never allow
+two writers to share one lineage. Use the [semantic artifact catalog](ARTIFACTS.md)
+for result selection; cloud code should not duplicate EWS's internal paths.
+
+Persistence compatibility and numerical portability are separate contracts. A
+valid recovery snapshot can preserve native checkpoint bytes without loading
+their backend; `portable_numpy` still rejects GPU/custom-backend execution. An
+intentionally pruned trajectory stays pruned after restore, with its receipt and
+retained derivations. Changed analysis reuses the nearest valid retained ancestor;
+if the necessary raw trajectory or continuation prefix is gone, `ews run` starts
+the required simulation afresh. Portable mode does not relax that rule.
 
 ## Interruption and loss bounds
 

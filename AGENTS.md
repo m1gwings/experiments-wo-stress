@@ -65,9 +65,24 @@ contract, with real-paper validation still needed before declaring it stable.
 - Keep stored numerical results separate from figures. Analysis must work without
   importing simulation components; custom metrics/plotters may import their own code.
 - Keep the public CLI to `count-runs`, `run`, `analyze`, `plot`, `inspect`, and
-  `clean`. `run` executes or resumes the study, then produces configured analysis
-  and figures only after all requested runs succeed. Counting runs is optional;
+  `clean`. `run` schedules simulation, per-run metrics, aggregation, and figures
+  when their durable dependencies are ready. Counting runs is optional;
   `analyze` and `plot` operate on saved results without scheduling simulations.
+- Recompute backwards only until the nearest retained valid ancestor. Derived
+  identities must prove reuse without requiring intentionally pruned ancestors.
+  Publish each run variant lazily before use; a compact durable request covers
+  the complete invocation. Prefer ready metrics and closing actual analysis groups,
+  with bounded fairness for simulations. Scheduling never enters scientific IDs.
+- `recording.retention: until_analyzed` removes only trajectories after every
+  configured per-run metric has a validated durable artifact. Publish intentional
+  pruning proof before deletion. Missing unmarked data remains corruption;
+  missing required raw ancestors may be rematerialized only by `run`. Pruned
+  prefixes/endpoints cannot authorize budget continuation. Default `keep` retains data.
+- Terminal timezone and task progress are observational. Display explicit zones;
+  keep persisted timestamps UTC and all display options outside identities.
+- Keep recovery in `storage/recovery.py`: versioned sealed snapshots under output
+  ownership, committed boundaries only, checksums, safe paths, and version rejection.
+  Cloud wrappers consume this API, never private checkpoint layout assumptions.
 - Keep memory and dependencies proportionate. Buffering is per active run, and
   analysis retains one run plus grouped summaries. Distributed execution is outside scope.
 - Deliver professional-quality code for every implementation task: clear names,
@@ -100,7 +115,8 @@ contract, with real-paper validation still needed before declaring it stable.
 - Keep compute observation separate from resource allocation and scientific state.
   Reporting is best effort on Linux/macOS and silently unavailable on Windows.
   Preserve invocation and attempt history outside result chunks and checkpoints;
-  distinguish elapsed worker time, process CPU time, and allocated GPU time.
+  distinguish pipeline elapsed time from cumulative task worker, process CPU,
+  and allocated GPU time. Never present overlapping work as sequential stages.
   Reuse consumes no new simulation compute; missing historical timing stays unknown.
   Reporting metadata and reporting-only edits must not change scientific or cache
   identities. Exact compatibility mappings require review; unknown execution-source

@@ -13,7 +13,7 @@ from .execution.compute import Invocation
 from .execution.coordinator import run_experiment
 from .execution.progress import TerminalProgress
 from .storage.experiment import inspect_experiment
-from .study.config import ExperimentConfig, load_config
+from .study.config import ExperimentConfig, load_config, resolve_display_timezone
 from .study.planning import plan_runs
 
 
@@ -24,8 +24,9 @@ def _run_study(
     workers: int | None,
     max_steps: int | None,
     quiet: bool = False,
+    timezone: str | None = None,
 ) -> tuple[dict[str, Any], int]:
-    """Execute the request, then derive its configured outputs only after completion."""
+    """Execute the dependency graph and report its simulation and derived outputs."""
     invocation = Invocation(
         output,
         config.execution["workers"] if workers is None else workers,
@@ -37,35 +38,19 @@ def _run_study(
                 config.name,
                 config.execution["workers"] if workers is None else workers,
                 quiet=quiet,
+                timezone=resolve_display_timezone(config.display, timezone),
             ) as progress:
                 report = run_experiment(
                     config, output, workers=workers, max_steps=max_steps, progress=progress
                 )
                 progress.finish(report.to_dict())
             result = report.to_dict()
-            # A completed subset must not stand in for the whole requested study.
-            # An intentional pause succeeds but defers analysis and figures.
-            if not (report.failed or report.paused or report.pending):
-                if config.analysis.get("metrics") or config.analysis.get("figures"):
-                    from .analysis.pipeline import analyze
-
-                    with invocation.stage("analysis"):
-                        summaries = analyze(config, output)
-                    if not config.analysis.get("figures"):
-                        result["groups"] = len(summaries)
-                if config.analysis.get("figures"):
-                    from .analysis.figures import export_figures
-
-                    with invocation.stage("plotting"):
-                        result["figures"] = [
-                            str(path) for path in export_figures(config, output, summaries)
-                        ]
     finally:
         compute = invocation.display_summary(sys.stderr)
     if compute:
         result["compute"] = compute
-    interrupted = report.pending or (report.paused and max_steps is None)
-    exit_code = 1 if report.failed else (130 if interrupted else 0)
+    interrupted = report.interrupted or report.pending or (report.paused and max_steps is None)
+    exit_code = 1 if report.failed or report.task_failures else (130 if interrupted else 0)
     return result, exit_code
 
 
@@ -86,9 +71,8 @@ def main(argv: list[str] | None = None) -> int:
         (
             "run",
             "Run the study and produce its configured analysis and figures.",
-            "Execute, resume, extend, or reuse simulation runs, then produce or reuse "
-            "configured analysis and figures when all requested runs complete successfully. "
-            "Failed, paused, or pending work defers analysis and figures. "
+            "Execute, resume, extend, or reuse the requested simulations and derived artifacts. "
+            "Metrics, aggregates, and figures run as their dependencies become durable. "
             "This is the normal complete workflow; count-runs is optional and "
             "does not need to be invoked first.",
         ),
@@ -121,6 +105,9 @@ def main(argv: list[str] | None = None) -> int:
                 "--portable",
                 action="store_true",
                 help="Opt into portable CPU/NumPy checkpoint continuation; requires compatible runtime and packages.",
+            )
+            child.add_argument(
+                "--timezone", help="Display timezone (IANA name); overrides display.timezone."
             )
             child.add_argument("--workers", type=int, help="Override the local worker count.")
             child.add_argument(
@@ -179,6 +166,7 @@ def main(argv: list[str] | None = None) -> int:
                     workers=args.workers,
                     max_steps=args.max_steps,
                     quiet=args.quiet,
+                    timezone=args.timezone,
                 )
             elif args.command == "analyze":
                 from .analysis.pipeline import analyze

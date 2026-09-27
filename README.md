@@ -21,7 +21,7 @@ explicit seeding of each component, *etc.*.
 - **Several interaction styles.** Use built-in online, offline, trial, or
   reinforcement-learning protocols with your own scientific components. Bandit,
   CSV, and Gymnasium data helpers are available.
-- **Analysis after execution.** Compute metrics from saved observations and
+- **Dependency-driven analysis.** Compute metrics from saved observations and
   instances, aggregate repetitions, and export PDF, JPG, or editable TikZ
   figures.
 - **Operational tools.** Count and inspect runs from the CLI, receive optional
@@ -73,7 +73,8 @@ runs:
       data.params.n_arms: [10, 20, 50]
 
 execution: {workers: 1}
-recording: {every_steps: 1, fields: [action, reward]}
+recording: {every_steps: 1, fields: [action, reward], retention: keep}
+display: {timezone: UTC}
 analysis:
   points: 100  # Default; null exports every computed point.
   metrics:
@@ -111,11 +112,20 @@ ews count-runs examples/sequential_study/experiment.yml
 ews run examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
 ```
 
-`run` executes or resumes the simulations, then produces configured analysis
-and figures once all requested runs have completed or been reused. Figures appear
-in `outputs/bandits/analysis/figures/`. Failed, paused, or interrupted execution
-leaves analysis for a later successful invocation. Compatible work is reused
-when you run the command again.
+`run` executes the requested dependency graph. Metrics run as trajectories finish,
+aggregates run when their repetitions are available, and figures run when their
+inputs are ready. Independent simulations can continue meanwhile. Figures appear
+in `outputs/bandits/analysis/figures/`. Interrupted invocations retain valid
+completed work for reuse.
+
+For storage-light studies, set `recording.retention: until_analyzed`. EWS removes
+raw trajectory chunks after all configured per-run metrics are durable, retaining
+instances and derived artifacts. Reuse stops at the nearest retained valid
+ancestor: figure changes reuse summaries, aggregator changes reuse metrics, and
+metric changes rematerialize simulations only when their raw input is gone.
+`keep` is the default. Select terminal wall-clock display with
+`display.timezone: Europe/Rome` or `ews run ... --timezone Europe/Rome`; every
+finish estimate includes its timezone, defaulting to UTC.
 
 `count-runs` validates configuration and returns only the study name and run count, here
 `{"name": "gaussian_bandit_comparison", "runs": 120}`. Counts combine grid
@@ -253,23 +263,19 @@ and delivery behavior.
 
 ## Python API
 
-From Python, call `run_experiment` for execution and `plot` for analysis and
-figures:
+From Python, call `run_experiment` for the configured pipeline:
 
 ```python
 from experiments_wo_stress import load_config, run_experiment
-from experiments_wo_stress.plotting import plot
 
 if __name__ == "__main__":
     config = load_config("examples/sequential_study/experiment.yml")
     report = run_experiment(config, "outputs/bandits", workers=2)
     print(report.to_dict())
-    if not report.failed and not report.pending and not report.paused:
-        plot(config, "outputs/bandits")
 ```
 
 The main guard is needed for multiple CPU workers and for any GPU execution,
-including one GPU worker. `run_experiment` automatically records its execution
+including one GPU worker. `run_experiment` automatically records its pipeline
 invocation on supported systems; separate Python analysis or plotting calls are
 outside that invocation's timings.
 
@@ -278,7 +284,7 @@ outside that invocation's timings.
 | Command | Purpose |
 | --- | --- |
 | `ews count-runs CONFIG` | Optionally validate configuration and count runs without executing them. |
-| `ews run CONFIG --output DIR` | Execute or resume, then produce configured analysis and figures after successful completion. |
+| `ews run CONFIG --output DIR` | Execute or reuse simulation, metric, aggregate, and figure dependencies as they become ready. |
 | `ews analyze CONFIG --output DIR` | Compute or reuse metrics and summaries. |
 | `ews plot CONFIG --output DIR` | Regenerate configured figures from saved results. |
 | `ews inspect DIR` | Read stored status and validate completed artifacts without executing runs. |
@@ -319,3 +325,5 @@ backends are rejected in portable mode. See [portable continuation](docs/PORTABI
 for the precise guarantees and limitations. Cloud deployment, environment locks,
 and automatic repeated `cloud-run` continuation belong to
 [cloud-experiments](https://github.com/m1gwings/cloud-experiments).
+
+Cloud wrappers can use the versioned [recovery snapshot API](docs/CLOUD.md#versioned-recovery-snapshots) to persist committed output without interpreting private checkpoint paths.

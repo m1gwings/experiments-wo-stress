@@ -219,6 +219,89 @@ class GPUExecutionTests(unittest.TestCase):
         self.assertFalse(list((self.root / "audit").glob("active_*")))
         self.assertNotIn("CUDA_VISIBLE_DEVICES", os.environ)
 
+    def test_custom_analysis_imports_and_constructors_stay_in_assigned_workers(self):
+        """Graph preparation and derivations never import GPU-aware study code in the parent."""
+        module = f"{self.module}_analysis"
+        (self.root / f"{module}.py").write_text(
+            '"""Require assigned visibility without a GPU framework or hardware."""\n'
+            "import json\nimport os\nfrom pathlib import Path\n"
+            "from experiments_wo_stress.metrics import MetricResult\n"
+            "IMPORT_GPU = os.environ.get('CUDA_VISIBLE_DEVICES')\n"
+            "assert IMPORT_GPU in {'3', '7'}, 'analysis import needs an assigned GPU'\n"
+            "def observe(audit, stage):\n"
+            "    gpu = os.environ.get('CUDA_VISIBLE_DEVICES')\n"
+            "    assert gpu == IMPORT_GPU, 'worker visibility changed'\n"
+            "    target = Path(audit)\n"
+            "    target.mkdir(exist_ok=True)\n"
+            "    observation = {'pid': os.getpid(), 'gpu': gpu, 'import_gpu': IMPORT_GPU}\n"
+            "    (target / f'{stage}_{os.getpid()}.json').write_text(json.dumps(observation))\n"
+            "    return observation\n"
+            "class Metric:\n"
+            "    def __init__(self, audit):\n"
+            "        self.audit = audit\n"
+            "        observe(audit, 'metric_constructor')\n"
+            "    def __getstate__(self):\n"
+            "        raise RuntimeError('custom instances cannot leave their worker')\n"
+            "    def compute(self, result):\n"
+            "        observe(self.audit, 'metric_compute')\n"
+            "        return MetricResult(result['step'], result['sample'])\n"
+            "class Plotter:\n"
+            "    def __init__(self, audit):\n"
+            "        self.audit = audit\n"
+            "        observe(audit, 'plotter_constructor')\n"
+            "    def __getstate__(self):\n"
+            "        raise RuntimeError('custom instances cannot leave their worker')\n"
+            "    def plot(self, summaries, figure, output_dir):\n"
+            "        path = output_dir / 'worker.json'\n"
+            "        path.write_text(json.dumps(observe(self.audit, 'figure_render')))\n"
+            "        return [path]\n",
+            encoding="utf-8",
+        )
+        config = self.configuration([3, 7], repetitions=4, peers=2)
+        audit = self.root / "analysis_audit"
+        config = replace(
+            config,
+            analysis={
+                "metrics": [
+                    {"name": "sample", "type": f"{module}:Metric", "params": {"audit": str(audit)}}
+                ],
+                "figures": [
+                    {
+                        "metric": "sample",
+                        "type": f"{module}:Plotter",
+                        "params": {"audit": str(audit)},
+                    }
+                ],
+            },
+        )
+        output = self.root / "gpu_pipeline"
+        report = run_experiment(config, output)
+        self.assertEqual(
+            (report.completed, report.failed, report.task_failures), (4, 0, 0), report.errors
+        )
+        self.assertNotIn(module, sys.modules)
+        self.assertNotIn(self.module, sys.modules)
+        metadata = json.loads((output / "metadata.json").read_text())
+        assignments = {
+            assignment["pid"]: str(assignment["gpu_id"])
+            for assignment in metadata["provenance"]["execution"]["worker_assignments"]
+        }
+        observations = [json.loads(path.read_text()) for path in audit.glob("*.json")]
+        self.assertTrue(list(audit.glob("metric_constructor_*.json")))
+        self.assertTrue(list(audit.glob("metric_compute_*.json")))
+        self.assertTrue(list(audit.glob("plotter_constructor_*.json")))
+        self.assertTrue(list(audit.glob("figure_render_*.json")))
+        for observed in observations:
+            self.assertNotEqual(observed["pid"], os.getpid())
+            self.assertEqual(observed["gpu"], assignments[observed["pid"]])
+            self.assertEqual(observed["import_gpu"], observed["gpu"])
+        figure = json.loads(Path(report.figures[0]).read_text())
+        self.assertIn(figure["pid"], assignments)
+        repeated = run_experiment(config, output)
+        self.assertEqual((repeated.completed, repeated.skipped, repeated.task_failures), (0, 4, 0))
+        self.assertNotIn(module, sys.modules)
+        self.assertNotIn("CUDA_VISIBLE_DEVICES", os.environ)
+
     def test_device_changes_reuse_variants_and_preserve_random_results(self):
         cpu = self.configuration(repetitions=3)
         gpu = replace(cpu, execution={**cpu.execution, "gpu_ids": [4]})

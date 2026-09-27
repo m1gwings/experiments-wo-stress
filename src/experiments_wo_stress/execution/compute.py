@@ -21,7 +21,7 @@ from pathlib import Path
 from time import monotonic
 from typing import Any
 
-from ..storage.files import read_json
+from ..storage.files import fingerprint, read_json
 from .compute_environment import artifact_size, collect_machine, supported
 from .compute_report import publish_attempt, publish_invocation
 
@@ -65,10 +65,10 @@ def _saved_step(root: Path, storage_id: str) -> int | None:
 
 
 class Invocation:
-    """Own one operational clock, stage durations, and eventual immutable report.
+    """Own the pipeline clock, outcome snapshot, and eventual immutable report.
 
-    CLI composition keeps this context open through analysis and plotting. The
-    coordinator reuses that context or opens its own for the execution-only API.
+    CLI and Python pipeline calls keep this context open through all task kinds. The
+    coordinator reuses that context or opens its own for the Python pipeline API.
     Construction does not create output files: the experiment must first publish
     its scientific request. Finalization errors are logged and never propagated.
     """
@@ -101,7 +101,7 @@ class Invocation:
             "started_at": _utc_now(),
             "workers": self._workers,
             "counts": dict.fromkeys(_COUNTS, 0),
-            "stages": dict.fromkeys(("execution", "analysis", "plotting")),
+            "stages": {"pipeline": None},
             "machine": {},
         }
         self.record["machine"] = (
@@ -133,6 +133,9 @@ class Invocation:
         counts = {key: getattr(report, key) for key in _COUNTS}
         counts["pending"] += max(0, planned - sum(counts.values()))
         self.record["counts"] = counts
+        self.record["task_failures"] = getattr(report, "task_failures", 0)
+        self.record["pending_tasks"] = getattr(report, "pending_tasks", 0)
+        self.record["interrupted"] = getattr(report, "interrupted", False)
 
     def _finish(self, failed: bool) -> None:
         # Do not populate an unowned directory or break first-request validation
@@ -146,9 +149,12 @@ class Invocation:
             wall_seconds=max(0.0, monotonic() - self._started),
             status=(
                 "failed"
-                if failed or counts["failed"]
+                if failed or counts["failed"] or self.record.get("task_failures")
                 else "incomplete"
-                if counts["paused"] or counts["pending"]
+                if counts["paused"]
+                or counts["pending"]
+                or self.record.get("pending_tasks")
+                or self.record.get("interrupted")
                 else "completed"
             ),
             artifact_bytes=size,
@@ -212,7 +218,7 @@ def _execute_observed(function: Callable, coordinator: Any, invocation: Invocati
     if invocation.record:
         coordinator.execution[_INVOCATION_KEY] = invocation.record["invocation_id"]
     try:
-        with invocation.stage("execution"):
+        with invocation.stage("pipeline"):
             return function(coordinator)
     finally:
         _observe("retain run counts", invocation.outcome, coordinator.report, len(coordinator.plan))
@@ -221,7 +227,7 @@ def _execute_observed(function: Callable, coordinator: Any, invocation: Invocati
 class Attempt:
     """Observe one worker task through cleanup, persisting separate start/end records.
 
-    Starts survive abrupt worker death with unknown duration. Successful reuse
+    Starts survive abrupt worker death with unknown duration. Worker-side reuse
     gets an explicit skipped endpoint with zero new compute. CPU deltas use the
     same process at both boundaries, including its threads but no child processes
     or prior tasks. In embedded single-worker use, unrelated threads can contribute.
@@ -238,6 +244,8 @@ class Attempt:
             "schema_version": 1,
             "invocation_id": execution[_INVOCATION_KEY],
             "attempt_id": uuid.uuid4().hex,
+            "task_kind": spec.get("task_kind", "simulation"),
+            "subject": spec.get("subject", spec["run_id"]),
             "run_id": spec["run_id"],
             "storage_id": storage_id,
             "group": spec["group"],
@@ -298,3 +306,26 @@ def observe_attempt(function: Callable) -> Callable:
                 _observe("publish attempt outcome", attempt.finish, status)
 
     return measured
+
+
+@contextmanager
+def observe_derivation(task: Any, execution: dict, root: str) -> Iterator[None]:
+    """Account for actual derived worker work independently of overlapping simulations."""
+    attempt = None
+    if _INVOCATION_KEY in execution:
+        identifier = fingerprint({"task": task.id})
+        spec = {
+            "run_id": identifier,
+            "group": task.kind,
+            "algorithm_name": task.subject,
+            "task_kind": task.kind,
+            "subject": task.subject,
+        }
+        attempt = _observe("start derived task", Attempt, spec, root, execution, identifier)
+    status = "failed"
+    try:
+        yield
+        status = "completed"
+    finally:
+        if attempt is not None:
+            _observe("publish derived task outcome", attempt.finish, status)

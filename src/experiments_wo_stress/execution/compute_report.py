@@ -69,8 +69,8 @@ def publish_attempt(root: Path, record: Mapping[str, Any], *, started: bool = Fa
 def publish_invocation(root: Path, record: Mapping[str, Any]) -> dict[str, Any]:
     """Publish a finished invocation and refresh summaries under their own lock.
 
-    This lock is independent of execution ownership because CLI analysis and
-    figure export finish after the execution coordinator releases its root lock.
+    Final reporting runs after pipeline output ownership is released. This
+    separate lock serializes compute summaries across independent observers.
     Reporting errors propagate to the best-effort caller, never to run artifacts.
     """
     root = Path(root)
@@ -278,6 +278,9 @@ def _coverage(
     root: Path, attempts: Sequence[dict[str, Any]], warnings: list[str]
 ) -> dict[str, Any]:
     """Inventory completion metadata without reading or revalidating numerical arrays."""
+    attempts = [
+        record for record in attempts if record.get("task_kind", "simulation") == "simulation"
+    ]
     active = set()
     metadata_path = root / "metadata.json"
     if metadata_path.exists():
@@ -411,7 +414,7 @@ def _regenerate_summary(root: Path) -> dict[str, Any]:
         "invocation_wall_seconds": sum(record.get("wall_seconds") or 0 for record in invocations),
         **{
             f"{stage}_wall_seconds": sum(record["stages"].get(stage) or 0 for record in invocations)
-            for stage in ("execution", "analysis", "plotting")
+            for stage in ("execution", "analysis", "plotting", "pipeline")
         },
     }
     summary = {
@@ -420,6 +423,12 @@ def _regenerate_summary(root: Path) -> dict[str, Any]:
         "latest_invocation": invocations[-1] if invocations else None,
         "totals": totals,
         "coverage": _coverage(root, attempts, warnings),
+        "tasks": {
+            kind: _attempt_totals(
+                [record for record in attempts if record.get("task_kind", "simulation") == kind]
+            )
+            for kind in ("simulation", "metric", "aggregate", "figure")
+        },
         "invocations": invocation_summaries,
         "attempt_timing": _timing_stats(
             [
@@ -513,15 +522,17 @@ def _markdown(summary: dict[str, Any]) -> str:
         "- Retained completed variants without recorded completion timing: "
         f"{coverage['retained_completed_variants_without_timing']} "
         "(historical compute unavailable).",
-        f"- Recorded execution attempts: {totals['attempt_count']}; "
+        f"- Recorded worker task attempts: {totals['attempt_count']}; "
         f"timed: {totals['timed_attempt_count']}; "
         f"unresolved: {totals['unresolved_attempt_count']}.",
         f"- End-to-end wall time, summed across {totals['invocation_count']} "
         f"finalized invocations: {_seconds(totals['invocation_wall_seconds'])}.",
-        f"- Execution / analysis / plotting wall time: "
-        f"{_seconds(totals['execution_wall_seconds'])} / "
-        f"{_seconds(totals['analysis_wall_seconds'])} / "
-        f"{_seconds(totals['plotting_wall_seconds'])}.",
+        f"- Pipeline elapsed time: {_seconds(totals['pipeline_wall_seconds'])}. "
+        "Worker tasks overlap; their cumulative times are not sequential stage durations.",
+        *[
+            f"- {kind.capitalize()} cumulative worker time: {_seconds(values['worker_seconds'])}."
+            for kind, values in summary["tasks"].items()
+        ],
         f"- Cumulative worker time: {totals['worker_hours']:.6g} worker-hours "
         f"({_seconds(totals['worker_seconds'])}).",
         f"- Cumulative allocated GPU time: {totals['gpu_hours']:.6g} GPU-hours "

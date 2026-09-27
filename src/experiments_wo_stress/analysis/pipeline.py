@@ -280,6 +280,16 @@ def analyze(config: ExperimentConfig, output_dir: str | Path) -> list[Summary]:
     bounds the returned summaries, exported tables, and downstream figures.
     """
     output_dir = Path(output_dir)
+    if read_json(output_dir / "metadata.json").get("schema_version") != 1:
+        from .graph import analyze_saved
+
+        return analyze_saved(config, output_dir, figures=False)[0]
+    with experiment_storage.ExperimentStore(output_dir).lock():
+        return _analyze_legacy(config, output_dir)
+
+
+def _analyze_legacy(config: ExperimentConfig, output_dir: Path) -> list[Summary]:
+    """Read schema-1 saved runs, which predate durable dependency receipts."""
     points = analysis_points(config.analysis)
     _validate_analysis_selection(config, output_dir)
     metrics = _metric_specs(config.analysis)

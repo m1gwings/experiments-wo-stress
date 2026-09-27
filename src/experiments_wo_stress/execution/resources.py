@@ -19,6 +19,9 @@ from multiprocessing.connection import Connection, wait
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
+    from ..analysis.graph import AnalysisGraph
     from ..study.config import ExperimentConfig
     from ..study.specs import RunSpec
     from .provenance import PreparedRequest
@@ -66,6 +69,27 @@ class GPUWorker:
     def submit(self, arguments: tuple) -> None:
         """Submit one run; receive its result before submitting another."""
         self.connection.send(("run", arguments))
+
+    def prepare_analysis(
+        self,
+        config: ExperimentConfig,
+        root: Path,
+        specs: list[RunSpec],
+        locations: dict[str, str],
+    ) -> AnalysisGraph | None:
+        """Inspect metric and plotter code within this worker's assigned visibility.
+
+        The caller holds experiment ownership while saved dependencies are read.
+        The returned graph contains descriptors and artifact references only;
+        custom component instances remain local to the assigned process.
+        """
+        self.connection.send(("prepare_analysis", (config, root, specs, locations)))
+        wait_gpu_workers([self])
+        return self.result()
+
+    def submit_task(self, task: Any, execution: dict, root: str) -> None:
+        """Run a derivation using the same exclusively assigned worker."""
+        self.connection.send(("derive", (task, execution, root)))
 
     def result(self) -> Any:
         """Receive a command result or describe a worker crash or remote error."""
@@ -125,6 +149,19 @@ def _worker_commands(connection: Connection, stop_event: Any, progress_queue: An
             try:
                 if command == "prepare":
                     result = prepare_gpu_request(payload)
+                elif command == "prepare_analysis":
+                    from ..analysis.graph import AnalysisGraph
+
+                    config, root, specs, locations = payload
+                    result = (
+                        AnalysisGraph(config, root, specs, locations)
+                        if config.analysis.get("metrics") or config.analysis.get("figures")
+                        else None
+                    )
+                elif command == "derive":
+                    from .scheduler import execute_derivation_task
+
+                    result = execute_derivation_task(*payload)
                 elif command == "run":
                     result = execute_run(*payload)
                 else:

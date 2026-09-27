@@ -14,7 +14,7 @@ from typing import Any
 
 import numpy as np
 
-from ..storage.files import atomic_json, digest_file, fingerprint, read_json
+from ..storage.files import atomic_json, digest_file, fingerprint, read_json, sync_directory
 
 
 def safe_name(value: Any, description: str = "Name") -> str:
@@ -124,14 +124,28 @@ class AnalysisCache:
         temporary = Path(tempfile.mkdtemp(prefix=".pending-", dir=parent))
         try:
             writer(temporary)
+            # A published generation is a durable dependency, including files
+            # produced by custom plotters rather than our atomic writers.
+            for path in temporary.rglob("*"):
+                if path.is_file():
+                    with path.open("rb") as stream:
+                        os.fsync(stream.fileno())
             checksums = {
                 path.relative_to(temporary).as_posix(): digest_file(path)
                 for path in sorted(temporary.rglob("*"))
                 if path.is_file()
             }
             atomic_json(temporary / "cache.json", {"identity": identity, "files": checksums})
+            for path in sorted(
+                (path for path in temporary.rglob("*") if path.is_dir()),
+                key=lambda path: len(path.parts),
+                reverse=True,
+            ):
+                sync_directory(path)
+            sync_directory(temporary)
             try:
                 os.rename(temporary, destination)
+                sync_directory(parent)
             except OSError:
                 if not self._validate(destination, identity):
                     raise

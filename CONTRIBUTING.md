@@ -35,9 +35,13 @@ at the boundary it touches.
 Keep raw trajectories in lossless binary chunks. Compute metrics and aggregation
 at full recorded resolution, then apply `analysis.points` at the shared summary
 export boundary; avoid independent trajectory-to-CSV paths in metrics or plots.
+Schedule from durable dependencies and stop recomputation at the nearest retained
+valid ancestor. Intentional trajectory pruning requires durable metric proofs;
+missing unmarked raw data remains corruption. Preserve these boundaries in
+recovery snapshots and test interruption around publication/deletion.
 
-Terminal progress is observational: workers send throttled step snapshots and the
-parent renders them. Keep UI state out of checkpoints, seeds, and scientific
+Terminal progress is observational: workers identify task kind and send throttled progress
+snapshots; the parent renders them with explicit display timezones. Keep UI state out of checkpoints, seeds, and scientific
 identities; test counters and estimates with controlled clocks, and smoke-test
 both a multi-worker terminal and redirected stderr.
 

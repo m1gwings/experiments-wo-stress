@@ -17,6 +17,7 @@ from .files import (
     read_json,
     write_arrays,
 )
+from .recovery import create_snapshot, restore_snapshot, validate_snapshot
 from .run import Recorder, RunStore, validate_results
 
 __all__ = [
@@ -30,12 +31,15 @@ __all__ = [
     "StorageError",
     "atomic_json",
     "atomic_text",
+    "create_snapshot",
     "digest_file",
     "fingerprint",
     "iter_completed_runs",
     "load_instance",
     "read_json",
+    "restore_snapshot",
     "save_instance",
+    "validate_snapshot",
     "validate_results",
     "write_arrays",
 ]

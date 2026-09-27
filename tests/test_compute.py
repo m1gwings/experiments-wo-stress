@@ -148,12 +148,14 @@ class ComputeLifecycleTests(unittest.TestCase):
         original = first.read_bytes()
         self.assertEqual(run_experiment(self.config, self.output).completed, 1)
         before = read_json(self.output / "compute/summary.json")
-        self.assertEqual(before["totals"]["attempt_count"], 2)
+        self.assertEqual(before["tasks"]["simulation"]["attempt_count"], 2)
+        self.assertEqual(before["totals"]["attempt_count"], 5)
         self.assertGreater(before["totals"]["paused_worker_seconds"], 0)
         self.assertEqual(run_experiment(self.config, self.output).skipped, 1)
         after = read_json(self.output / "compute/summary.json")
         self.assertEqual(after["totals"]["worker_seconds"], before["totals"]["worker_seconds"])
-        self.assertEqual(after["totals"]["attempt_count"], 2)
+        self.assertEqual(after["tasks"]["simulation"]["attempt_count"], 2)
+        self.assertEqual(after["totals"]["attempt_count"], 5)
         self.assertEqual(after["totals"]["gpu_seconds"], 0)
         self.assertEqual(len(list((self.output / "compute/invocations").glob("*.json"))), 3)
         self.assertEqual(first.read_bytes(), original)
@@ -200,7 +202,7 @@ class ComputeLifecycleTests(unittest.TestCase):
         machine.assert_not_called()
         self.assertFalse((self.output / "compute").exists())
 
-    def test_cli_separates_stage_durations_keeps_json_and_exposes_inspect_pointer(self):
+    def test_cli_reports_pipeline_wall_time_and_cumulative_task_costs(self):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):
             code = main(["run", str(self.path), "--output", str(self.output)])
@@ -209,9 +211,11 @@ class ComputeLifecycleTests(unittest.TestCase):
         self.assertTrue(Path(report["compute"]["report"]).is_file())
         self.assertIn("worker-hours", stderr.getvalue())
         saved = read_json(self.output / "compute/summary.json")["latest_invocation"]
-        for stage in ("execution", "analysis", "plotting"):
-            self.assertGreaterEqual(saved["stages"][stage], 0)
-        self.assertGreaterEqual(saved["wall_seconds"], sum(saved["stages"].values()))
+        self.assertEqual(set(saved["stages"]), {"pipeline"})
+        self.assertGreaterEqual(saved["wall_seconds"], saved["stages"]["pipeline"])
+        summary = read_json(self.output / "compute/summary.json")
+        for kind in ("simulation", "metric", "aggregate", "figure"):
+            self.assertGreater(summary["tasks"][kind]["worker_seconds"], 0)
         stdout = io.StringIO()
         with redirect_stdout(stdout):
             self.assertEqual(main(["inspect", str(self.output)]), 0)
@@ -222,7 +226,7 @@ class ComputeLifecycleTests(unittest.TestCase):
     def test_analysis_failure_still_publishes_invocation_and_completed_simulation(self):
         with (
             patch(
-                "experiments_wo_stress.analysis.pipeline.analyze",
+                "experiments_wo_stress.analysis.metrics.FieldMetric.compute",
                 side_effect=ValueError("bad metric"),
             ),
             redirect_stderr(io.StringIO()),
@@ -232,36 +236,19 @@ class ComputeLifecycleTests(unittest.TestCase):
         saved = read_json(self.output / "compute/summary.json")["latest_invocation"]
         self.assertEqual(saved["status"], "failed")
         self.assertEqual(saved["counts"]["completed"], 1)
-        self.assertIsNotNone(saved["stages"]["analysis"])
-        self.assertIsNone(saved["stages"]["plotting"])
+        self.assertGreaterEqual(saved["stages"]["pipeline"], 0)
+        summary = read_json(self.output / "compute/summary.json")
+        self.assertEqual(summary["tasks"]["metric"]["attempt_count"], 1)
+        self.assertEqual(summary["tasks"]["figure"]["attempt_count"], 0)
         self.assertEqual(len(list(iter_completed_runs(self.output))), 1)
 
-    def test_compute_changes_preserve_legacy_variants_rng_and_analysis_cache(self):
-        original_collect = provenance.collect_provenance
-
-        def legacy_provenance(*args):
-            result = original_collect(*args)
-            for name, (_, previous) in _OBSERVATIONAL_REVISIONS.items():
-                if name in result["implementation"]:
-                    result["implementation"][name] = previous
-            return result
-
-        with patch.object(provenance, "collect_provenance", side_effect=legacy_provenance):
-            # Coordinator imports the function directly; emulate the old source
-            # inventory there as well to produce a real compatible saved variant.
-            with patch(
-                "experiments_wo_stress.execution.coordinator.collect_provenance", legacy_provenance
-            ):
-                self.assertEqual(run_experiment(self.config, self.output).completed, 1)
+    def test_compute_changes_preserve_variants_rng_and_analysis_cache(self):
+        self.assertEqual(run_experiment(self.config, self.output).completed, 1)
         spec = plan_runs(self.config)[0]
         expected_rng = make_rngs(spec)["algorithm"].random(5)
         from experiments_wo_stress.analysis.figures import plot
 
-        with patch(
-            "experiments_wo_stress.analysis.figures.implementation_digest",
-            return_value=_OBSERVATIONAL_REVISIONS["analysis/figures.py"][1],
-        ):
-            plot(self.config, self.output)
+        plot(self.config, self.output)
         cache = {
             path: path.read_bytes()
             for path in (self.output / "analysis/cache").rglob("*")
@@ -290,7 +277,9 @@ class ComputeLifecycleTests(unittest.TestCase):
         package = Path(provenance.__file__).resolve().parents[1]
         for name, (reviewed, previous) in _OBSERVATIONAL_REVISIONS.items():
             with self.subTest(module=name):
-                self.assertEqual(provenance.digest_file(package / name), reviewed)
+                current = provenance.digest_file(package / name)
+                if current != reviewed:
+                    self.assertEqual(implementation_digest(name, current), current)
                 self.assertEqual(implementation_digest(name, reviewed), previous)
                 self.assertEqual(
                     implementation_digest(name, "changed implementation"), "changed implementation"

@@ -176,6 +176,9 @@ recording:
   every_steps: 1
   fields: [action, reward]
   buffer_bytes: 1048576
+  retention: keep
+display:
+  timezone: UTC
 analysis:
   points: 100
   metrics:
@@ -205,8 +208,10 @@ Run from the research repository:
 ews run experiment.yml --output outputs/study --workers 2
 ```
 
-`run` executes the study and produces its configured analysis and figures after
-all requested runs complete or are reused. Optionally use
+`run` executes the study and its configured analysis and figures as their own
+durable dependencies become available. Metrics can run after each simulation,
+aggregates after their repetitions, and figures after their required summaries.
+Unrelated simulations can continue concurrently. Optionally use
 `ews count-runs experiment.yml` to validate configuration and check the experiment
 size before execution; it is never required. This example returns only
 `{"name": "illustrative_bandits", "runs": 12}`: two grid values × two algorithms
@@ -215,7 +220,7 @@ a representative run.
 
 The generator saves the drawn means in an immutable instance. It emits actions
 and rewards; the algorithm sees the reward and arm count, not hidden means.
-`pseudo_regret` combines saved actions with saved means after execution. Summary
+`pseudo_regret` combines saved actions with saved means after each run completes. Summary
 tables appear under `analysis/`; the figure appears under `analysis/figures/`.
 With the `plot` extra installed, use `formats: [pdf, jpg, tikz]`.
 
@@ -350,6 +355,20 @@ cannot later supply missing actions or rewards. Recorded values need stable
 numerical dtypes and shapes. Checkpoints occur between complete protocol steps;
 an offline fit or trial restarts its step if interrupted inside the call.
 
+`recording.retention` is `keep` by default. Select `until_analyzed` to remove
+completed raw result chunks after every currently configured per-run metric has
+been durably materialized and validated. Recording remains at the configured
+resolution; it is never silently sparsified. Aggregation and figures can consume
+retained metrics after deletion. Instances, provenance, checkpoint files, logs,
+and compute history remain. Without configured metrics, raw trajectories remain.
+The saved state distinguishes intentional pruning from corruption.
+
+Increasing the budget still requires proof of correct continuation and a usable
+raw prefix and endpoint. After pruning, EWS conservatively runs the required
+simulation fresh; it does not assume metrics compose incrementally. Switching
+back to `keep` requests raw materialization again. Retention selection changes
+neither scientific IDs nor RNG streams.
+
 ## Choose checkpoint representation when needed
 
 Ordinary NumPy studies, including the runnable example, need no backend
@@ -442,7 +461,8 @@ CUDA masking. EWS requires `CUDA_VISIBLE_DEVICES` to be unset before GPU executi
 an existing value, including an empty string, is rejected. Each worker inherits
 its one-device mask before the spawned interpreter imports the main script or
 study components. Execution planning and component/source inspection also run
-in a GPU worker. A worker keeps its assignment across runs, and the coordinator's
+in a GPU worker, as do metric and plotter imports and constructor inspection.
+A worker keeps its assignment across all task kinds, and the coordinator's
 environment is restored after launch. The algorithm sees only the local device,
 normally `cuda:0`, so it needs no physical-device knowledge or scheduling code.
 This covers EWS execution imports, not study code imported earlier by the caller
@@ -482,18 +502,19 @@ quota. EWS imports no framework to inspect hardware, records no unnecessary
 personal identifiers in this report, and queries no cloud metadata service.
 Record cloud provider, machine type, and quota details separately if relevant.
 
-An invocation records UTC start/finish timestamps, total elapsed time, separate
-execution/analysis/plotting durations, and completed/reused/paused/failed/pending
-counts. With figures configured, analysis is timed first; plotting consumes those
-summaries without repeating analysis. The public `plot` API still performs both
-operations. The Python `run_experiment`
-API records an execution-only invocation. Separate `analyze` and `plot` commands
-or Python calls are outside that invocation's timing.
+An invocation records UTC start/finish timestamps, elapsed pipeline time, and
+completed/reused/paused/failed/pending simulation counts. Task attempts identify
+simulation, metric, aggregation, or figure work. Their execution can overlap;
+do not add them as sequential stage durations. Historical records keep their
+original stage fields. The Python `run_experiment` API also executes and measures
+the configured pipeline. Separate `analyze` and `plot` commands or Python calls
+are outside that invocation's timing.
 
 Interpret compute quantities as follows:
 
-- Worker time sums elapsed execution-attempt durations, including setup, restore,
-  checkpoints, and cleanup. Four concurrent workers active for one hour produce
+- Worker time sums elapsed task-attempt durations, with totals by task kind.
+  Simulation attempts include setup, restore, checkpoints, and cleanup. Four
+  concurrent workers active for one hour produce
   roughly four worker-hours and one hour of elapsed time.
 - CPU user/system time is the per-attempt change in process
   `resource.getrusage(RUSAGE_SELF)`. It includes process threads, excludes child
@@ -509,11 +530,12 @@ Interpret compute quantities as follows:
   symlinks, before publishing the new report. This includes retained artifacts
   and earlier report files; it is not allocated filesystem blocks or peak disk use.
 
-Each actual attempt has a scientific run ID, stored variant ID, group/algorithm,
-status, and timing. Pause/resume adds attempts. Reusing a valid completion adds
-no new simulation compute. Aggregates distinguish completed attempts from
-failed/paused work and give count/mean/median/min/max attempt statistics, including
-group/algorithm summaries. A resumed successful attempt measures only the
+Each actual simulation attempt has a scientific run ID, stored variant ID,
+group/algorithm, status, and timing; derived attempts identify their task and
+kind. Pause/resume adds attempts. Reusing a valid artifact adds no task compute.
+Totals by task kind distinguish completed attempts from failed/paused work.
+The report also gives count/mean/median/min/max attempt statistics and grouped
+timing summaries. A resumed successful attempt measures only the
 remaining work, not the complete scientific run. Old artifacts without timing
 and forced exits without a finish record remain unknown; observed totals may
 therefore be lower bounds. Selective run cleanup retains compute history;
@@ -550,8 +572,8 @@ passed to built-in or custom plotters. Choose an integer of at least 2 or
 long curves retain deterministic, approximately evenly spaced row positions
 including both endpoints, without duplicates. CSV `x` keeps actual metric
 coordinates, usually one-based steps. `1` is rejected to preserve both endpoints.
-This export setting leaves raw data and full metric caches intact and does not
-affect simulation identities. Use `recording.every_steps: 1` for complete
+This export setting does not change raw data, full metric caches, or simulation
+identities; raw retention is controlled separately. Use `recording.every_steps: 1` for complete
 trajectories; reducing recording frequency discards metric inputs.
 
 Built-in metrics include `field`, `cumulative_sum`, `pseudo_regret`, and
@@ -588,7 +610,9 @@ ews run experiment.yml --output outputs/study --workers 2
 ```
 
 `run` automatically shows a Rich dashboard on interactive stderr, with one row
-per worker, progress, elapsed time, approximate ETA, and study counts. Redirected
+per worker identifying its `SIM`, `METRIC`, `AGG`, or `FIGURE` task and subject,
+progress where meaningful, elapsed time, status, and approximate ETA. The summary
+keeps simulation and derived-task counts separate. Redirected
 stderr receives plain updates every 30 seconds; failures are immediate and final
 summaries are always emitted. `--quiet` keeps only final summaries and errors.
 JSON stays on stdout and `NO_COLOR` disables colors. Ctrl-C retains safe
@@ -596,25 +620,49 @@ step-boundary cancellation and restores the terminal. Study components should
 use their injected logger, not print competing progress bars. Tracebacks stay in
 per-run `run.log` and `failure.json`; Discord remains independent.
 
+`display.timezone` selects an installed IANA timezone such as `Europe/Rome`;
+`ews run ... --timezone Europe/Rome` overrides YAML. The default is `UTC`, with
+no environment override. Finish estimates include an explicit zone, for example
+`Finish ~13:08 CEST`, and invalid names fail clearly. This affects terminal
+display only: persisted timestamps remain UTC, and scientific identities,
+compatibility, RNGs, and cache keys are unchanged.
+
 Progress uses `step / budget.steps` for online/RL work. Offline fits and trials
 have one indivisible step. A custom protocol with no budget may optionally expose
 a positive integer `total_steps` in protocol-step units; otherwise progress is
 indeterminate. Per-run ETA measures only new work since restoration, waiting for
 two seconds and 1% progress. Global ETA waits for five seconds and a completed
 execution, then combines recent median run durations, queued work, active fractions,
-and concurrency; reuse/failures do not train it. Estimates are approximate for
-heterogeneous workloads. The Python `run_experiment` API remains silent unless
-given `progress=` with an entered `TerminalProgress(name, workers)` context from
+and concurrency; reuse/failures do not train it. Overall ETA remains indeterminate
+while derived work has no defensible duration estimate. Estimates are approximate
+for heterogeneous workloads. The Python `run_experiment` API remains silent unless
+given `progress=` with an entered `TerminalProgress(name, workers,
+timezone="Europe/Rome")` context from
 `experiments_wo_stress.execution.progress`. Monitoring changes no scientific state
 or identities.
 
-`run` executes or resumes the study, then produces configured analysis and
-figures only if there are no failed, paused, or pending runs. Rerun the same
-command after interruption. `analyze` and `plot` work independently from saved
-results, so metrics and figures can change without repeating expensive
-simulations; `plot` computes or reuses the analysis it needs. Compatible completed
-work is reused, while changes to scientific settings, code, tracked inputs, or recording
-retain separate variants. The active request selects the results for analysis.
+`run` executes or resumes a dependency pipeline, sharing its configured workers
+among simulations, metrics, aggregation, and figures. Ready metrics receive
+priority, then aggregation and figures. Simulations prefer partially completed
+aggregation groups, derived from the actual `group_by` and supported `reduce_over`
+settings. Regular simulation admission prevents starvation. GPU workers retain
+their fixed device assignments across all task kinds. Progress observations never
+determine dependency readiness or scientific state.
+
+Rerun the same command after interruption. Valid completed artifacts remain
+reusable even if unrelated work failed or paused. Recompute backwards only until
+the nearest retained valid ancestor: a figure change reuses aggregate summaries;
+an aggregation change reuses per-run metrics; a metric change reuses retained raw
+observations, or reruns only the required simulations if those observations were
+pruned. An unchanged request with valid derived outputs performs no simulation,
+metric, aggregation, or rendering work even after raw deletion. Missing dependency
+proof means conservative recomputation.
+
+`analyze` and `plot` operate on saved artifacts and never launch simulations.
+If a changed derivation needs a pruned raw ancestor, they direct the user to
+`ews run` to rematerialize it. `plot` computes or reuses only the analysis its
+figures need. Changes to scientific settings, code, tracked inputs, or recording
+selection retain separate variants. The active request selects results for analysis.
 Declare external inputs in YAML component `dependencies` or class
 `dependency_files` so their changes are tracked.
 
@@ -634,8 +682,8 @@ The six public commands are `count-runs`, `run`, `analyze`, `plot`, `inspect`, a
 `clean`. The optional `ews count-runs experiment.yml` validates configuration and
 returns only the study name and number of runs. It does not execute the study or
 require an output directory, and never needs to precede `run`. From Python,
-`run_experiment` performs execution;
-call the separate `analyze` or `plot` API when derived outputs are wanted.
+`run_experiment` performs the configured pipeline; separate `analyze` and `plot`
+APIs revise saved derivations without simulation.
 
 Cleanup is a preview until `--yes` is supplied. Scopes are `analysis`,
 `checkpoints`, `inactive`, `runs`, and `all`. Removing checkpoints loses the
@@ -721,6 +769,38 @@ require `--path RELATIVE_PATH`. Plain `pull RUN_ID` preserves the whole archive.
 Check the current cloud-experiments README/help for exact syntax. Schema support
 is detected per run; cloud provenance still records the exact EWS commit.
 
+## Versioned cloud recovery
+
+Cloud wrappers must use EWS's recovery API, not infer resumability from private
+run or checkpoint paths. Stop the writer, then create a sealed snapshot outside
+the output directory with a destination that does not already exist:
+
+```python
+from experiments_wo_stress.storage import (
+    create_snapshot,
+    restore_snapshot,
+    validate_snapshot,
+)
+
+snapshot = create_snapshot("outputs/study", "snapshots/study-001")
+manifest = validate_snapshot(snapshot)
+restore_snapshot(snapshot, "outputs/restored-study")
+```
+
+`create_snapshot` holds experiment ownership and copies only committed retained
+artifacts, including intentional-pruning evidence and valid referenced checkpoint
+generations. Temporary and uncommitted objects are excluded. The snapshot contains
+`output/` payloads and `recovery.json`, whose schema is
+`experiments-wo-stress/recovery`, version `1`; it records relative payload paths,
+sizes, SHA-256 checksums, directory paths (including empty payload directories),
+and a snapshot identity. Recreate the listed directories when downloading. Upload all payloads first and
+publish the manifest last as the remote commit point. Reject unsupported future
+versions rather than guessing their meaning. After downloading, validate the
+complete snapshot before restoring to a nonexistent output directory; restoration
+never merges or overwrites an existing tree. Run EWS against the restored output
+to apply normal variant, compatibility, and checkpoint validation. The discovery
+catalog `artifacts.json` identifies locations and is not a recovery manifest.
+
 ## Disposable CPU worker continuation
 
 Use `ews run CONFIG --output OUTPUT --portable`, or set
@@ -743,4 +823,5 @@ output restore/persistence, and single-writer VM leases. Repeated `cloud-run`
 continues the logical study; `--fresh` starts an independent lineage. EWS owns
 all checkpoint and completed-run decisions. SIGINT/SIGTERM requests a checkpoint
 at a safe protocol boundary; forced termination can lose work since the previous
-committed checkpoint. Preserve the entire output tree between attempts.
+committed checkpoint. Persist and restore the sealed EWS recovery snapshot
+between attempts.

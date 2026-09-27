@@ -11,10 +11,11 @@ import numpy as np
 
 from ..components.loading import load_class
 from ..execution.compatibility import implementation_digest
+from ..storage.experiment import ExperimentStore
 from ..storage.files import atomic_json, digest_file, fingerprint, read_json
 from ..study.specs import canonical_json
 from .cache import AnalysisCache, cache_identity, safe_name, source_identity
-from .pipeline import Summary, analyze
+from .pipeline import Summary, _analyze_legacy
 
 if TYPE_CHECKING:
     from ..study.config import ExperimentConfig
@@ -113,8 +114,13 @@ def plot(config: ExperimentConfig, output_dir: str | Path) -> list[Path]:
     figures = config.analysis.get("figures", [])
     if not isinstance(figures, list):
         raise ValueError("analysis.figures must be a list")
-    summaries = analyze(config, output_dir)
-    return export_figures(config, output_dir, summaries)
+    if read_json(Path(output_dir) / "metadata.json").get("schema_version") != 1:
+        from .graph import analyze_saved
+
+        return analyze_saved(config, output_dir, figures=True)[1]
+    with ExperimentStore(output_dir).lock():
+        summaries = _analyze_legacy(config, Path(output_dir))
+        return export_figures(config, output_dir, summaries)
 
 
 def export_figures(
@@ -122,10 +128,9 @@ def export_figures(
 ) -> list[Path]:
     """Export figures from summaries already analyzed for this config and output.
 
-    CLI composition uses this internal boundary to time analysis and plotting
-    separately without reading saved numerical arrays twice. The caller must
-    first finish ``analyze`` for the same configuration and output directory;
-    its current aggregate cache identity remains the source of figure identity.
+    Legacy schema-1 analysis uses this boundary after producing summaries. Its
+    current aggregate cache identity supplies figure dependencies. Current outputs
+    use individual figure tasks in the dependency graph.
     """
     figures = config.analysis.get("figures", [])
     if not isinstance(figures, list):
@@ -139,28 +144,7 @@ def export_figures(
     paths: list[Path] = []
     cache_keys = []
     for figure, selected, name in prepared:
-        plotter = None
-        implementation = {
-            "exporter": implementation_digest("analysis/figures.py", digest_file(Path(__file__)))
-        }
-        if figure.get("type", "line") != "line":
-            params = figure.get("params", {})
-            if not isinstance(params, dict):
-                raise ValueError("Custom plotter params must be a mapping")
-            plotter = load_class(figure["type"])(**params)
-            if not callable(getattr(plotter, "plot", None)):
-                raise TypeError(
-                    "A custom plotter must implement plot(summaries, figure, output_dir)"
-                )
-            implementation["custom"] = source_identity(type(plotter))
-        formats = figure.get("formats", ["pdf"])
-        if plotter is None and any(fmt in {"pdf", "jpg"} for fmt in formats):
-            from importlib.metadata import PackageNotFoundError, version
-
-            try:
-                implementation["matplotlib"] = version("matplotlib")
-            except PackageNotFoundError as exc:
-                raise ImportError("PDF/JPG export needs experiments-wo-stress[plot]") from exc
+        implementation, plotter = _figure_implementation(figure)
         identity = cache_identity(
             "plot",
             aggregate=current["aggregate_key"],
@@ -180,6 +164,31 @@ def export_figures(
     current["plot_keys"] = cache_keys
     atomic_json(cache.current_path, current)
     return paths
+
+
+def _figure_implementation(figure: dict[str, Any]) -> tuple[dict[str, Any], Any]:
+    """Resolve a figure's renderer and code identity independently of its inputs."""
+    plotter = None
+    implementation = {
+        "exporter": implementation_digest("analysis/figures.py", digest_file(Path(__file__)))
+    }
+    if figure.get("type", "line") != "line":
+        params = figure.get("params", {})
+        if not isinstance(params, dict):
+            raise ValueError("Custom plotter params must be a mapping")
+        plotter = load_class(figure["type"])(**params)
+        if not callable(getattr(plotter, "plot", None)):
+            raise TypeError("A custom plotter must implement plot(summaries, figure, output_dir)")
+        implementation["custom"] = source_identity(type(plotter))
+    formats = figure.get("formats", ["pdf"])
+    if plotter is None and any(fmt in {"pdf", "jpg"} for fmt in formats):
+        from importlib.metadata import PackageNotFoundError, version
+
+        try:
+            implementation["matplotlib"] = version("matplotlib")
+        except PackageNotFoundError as exc:
+            raise ImportError("PDF/JPG export needs experiments-wo-stress[plot]") from exc
+    return implementation, plotter
 
 
 def _prepare_figures(

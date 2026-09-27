@@ -5,9 +5,11 @@ from __future__ import annotations
 import io
 import unittest
 from dataclasses import replace
+from datetime import datetime, timezone
 from queue import Queue
 from types import SimpleNamespace
 from unittest.mock import patch
+from zoneinfo import ZoneInfo
 
 from rich.console import Console
 
@@ -78,6 +80,17 @@ class WorkerProgressTests(unittest.TestCase):
                 self.assertEqual(reporter.state.total, total)
                 reporter.finish("completed")  # a full monitoring queue never blocks execution
                 self.assertEqual(queue.qsize(), 2)
+
+    def test_derived_task_snapshots_keep_atomic_work_indeterminate(self):
+        queue = Queue()
+        reporter = ProgressReporter(queue, "metric:run", None, kind="METRIC", subject="reward")
+        reporter.advance(0, force=True)
+        self.assertEqual(reporter.state.kind, "METRIC")
+        self.assertEqual(reporter.state.status, "running")
+        self.assertIsNone(reporter.state.fraction)
+        self.assertIsNone(reporter.state.eta(100))
+        reporter.finish("completed")
+        self.assertEqual(queue.queue[-1].fraction, 1)
 
 
 class TerminalProgressTests(unittest.TestCase):
@@ -175,3 +188,108 @@ class TerminalProgressTests(unittest.TestCase):
                 self.assertEqual(text.count("[ews]"), 1)
                 self.assertIn("Aborted" if aborted else "Completed", text)
                 self.assertNotIn("\x1b", text)
+
+    def test_workers_switch_task_kinds_without_overwriting_simulation_counts(self):
+        self.display.configure(1)
+        self.display.configure_tasks({"METRIC": 1, "AGG": 1, "FIGURE": 1})
+        self.send(self.spec, 10)
+        self.display.run_finished((self.spec.run_id, "completed", None))
+        for kind in ("METRIC", "AGG", "FIGURE"):
+            task_id = kind.lower() + ":subject"
+            self.display.task_started(task_id, kind, "reward [literal]")
+            with patch("experiments_wo_stress.execution.progress.os.getpid", return_value=10):
+                reporter = ProgressReporter(
+                    self.display.queue, task_id, None, kind=kind, subject="reward"
+                )
+            reporter.advance(0, force=True)
+            self.display._drain()
+            self.assertEqual(self.display.rows[10].kind, kind)
+            self.assertEqual(self.display.names[10], "reward [literal]")
+            self.assertEqual(self.display.counts["completed"], 1)
+            self.assertIsNone(self.display.remaining(20))
+            self.display.console.print(self.display.render(20))
+            self.assertIn(kind, self.stream.getvalue())
+            self.display.task_finished(task_id)
+            reporter.advance(0, force=True)
+            self.display._drain()
+            self.assertEqual(self.display.rows[10].status, "completed")
+        self.assertEqual(self.display.remaining(20), 0)
+        self.assertEqual(len(self.display.rows), 1)
+        self.assertIn("METRIC 1/1 | AGG 1/1 | FIGURE 1/1", self.display._summary(20))
+
+    def test_global_eta_does_not_treat_unknown_derived_work_as_simulation_work(self):
+        self.display.configure(1)
+        self.send(self.spec, 10)
+        self.display.run_finished((self.spec.run_id, "completed", None))
+        self.assertEqual(self.display.remaining(20), 0)
+        self.display.configure_tasks({"METRIC": 1})
+        self.assertIsNone(self.display.remaining(20))
+
+    def test_bulk_reuse_closes_pipeline_without_creating_worker_rows(self):
+        self.display.configure(1)
+        self.display.run_finished((self.spec.run_id, "skipped", None))
+        self.display.configure_tasks({"METRIC": 5, "AGG": 1, "FIGURE": 1})
+        self.display.reuse_tasks({"METRIC": 5, "AGG": 1, "FIGURE": 1})
+        self.assertEqual(self.display.rows, {})
+        self.assertEqual(self.display.remaining(20), 0)
+        self.assertIn("METRIC 5/5 | AGG 1/1 | FIGURE 1/1", self.display._summary(20))
+
+    def test_interrupted_derived_work_is_not_reported_as_completed_simulations(self):
+        with TerminalProgress("study", 1, quiet=True, console=self.console) as display:
+            display.configure(1)
+            display.configure_tasks({"METRIC": 1, "AGG": 1})
+            display.run_finished((self.spec.run_id, "completed", None))
+            display.finish(
+                {
+                    "completed": 1,
+                    "skipped": 0,
+                    "failed": 0,
+                    "paused": 0,
+                    "pending": 0,
+                    "pending_tasks": 2,
+                    "interrupted": True,
+                }
+            )
+        output = self.stream.getvalue()
+        self.assertIn("Paused/interrupted: 1 completed", output)
+        self.assertIn("0 pending", output)
+        self.assertIn("2 derived tasks pending", output)
+
+    def test_derived_failures_remain_visible_in_compact_pipeline_summary(self):
+        self.display.configure(1)
+        self.display.configure_tasks({"METRIC": 1})
+        self.display.task_started("metric", "METRIC", "reward")
+        self.display.task_finished("metric", "failed", "invalid values")
+        self.assertIn("METRIC 0/1 (1 failed)", self.display._summary(20))
+        self.assertIn("Failed METRIC reward: invalid values", self.stream.getvalue())
+        self.assertEqual(self.display.counts["failed"], 0)
+
+    def test_derived_rows_fit_narrow_terminals_with_literal_subjects(self):
+        self.display.configure(1)
+        self.display.configure_tasks({"FIGURE": 1})
+        self.display.task_started("figure", "FIGURE", "[red]" * 100)
+        self.display.queue.put(WorkerProgress(10, "figure", 0, 0, kind="FIGURE"))
+        self.display._drain()
+        for width in (40, 60, 80, 120):
+            with self.subTest(width=width):
+                stream = io.StringIO()
+                self.display.console = Console(file=stream, width=width, force_terminal=False)
+                self.display.console.print(self.display.render(10))
+                self.assertLessEqual(max(map(len, stream.getvalue().splitlines())), width)
+                self.assertIn("FIGURE", stream.getvalue())
+
+    def test_finish_estimates_include_selected_timezone_and_daylight_saving(self):
+        cases = (
+            ("UTC", datetime(2026, 7, 1, 11, 8, tzinfo=timezone.utc), 0, "~11:08 UTC"),
+            ("Europe/Rome", datetime(2026, 7, 1, 11, 8, tzinfo=timezone.utc), 0, "~13:08 CEST"),
+            ("Europe/Rome", datetime(2026, 1, 1, 11, 8, tzinfo=timezone.utc), 0, "~12:08 CET"),
+            ("Europe/Rome", datetime(2026, 10, 25, 0, 50, tzinfo=timezone.utc), 1200, "~02:10 CET"),
+        )
+        for name, now, remaining, expected in cases:
+            with self.subTest(timezone=name, now=now):
+                self.display.timezone = ZoneInfo(name)
+                with patch("experiments_wo_stress.execution.progress.datetime") as wall_clock:
+                    wall_clock.now.return_value = now
+                    self.assertEqual(self.display._finish_estimate(remaining), expected)
+                    wall_clock.now.assert_called_once_with(timezone.utc)
+        self.assertEqual(self.display._finish_estimate(None), "estimating…")

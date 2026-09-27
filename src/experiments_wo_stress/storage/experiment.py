@@ -70,7 +70,11 @@ class ExperimentStore:
 
     def retained_variants(self) -> dict[str, Path]:
         """Return all run directories, including variants outside the active request."""
-        return {path.name: path for path in self.runs_path.iterdir() if path.is_dir()}
+        return (
+            {path.name: path for path in self.runs_path.iterdir() if path.is_dir()}
+            if self.runs_path.exists()
+            else {}
+        )
 
     def publish_variant(self, storage_id: str, metadata: dict[str, Any]) -> None:
         """Create a variant, or verify that its stored identity still matches."""
@@ -138,7 +142,22 @@ class ExperimentStore:
                 status = progress["status"]
                 if path.exists():
                     target = metadata.get("requests", {}).get(run_id, {}).get("budget_steps")
-                    completion = RunStore(path.parent).completion(target)
+                    from .trajectories import result_reference
+
+                    reference = None
+                    if run_id in metadata.get("requests", {}) and any(
+                        (path.parent / name).exists()
+                        for name in ("trajectory.json", "trajectory-history.json")
+                    ):
+                        reference = result_reference(
+                            root, run_id, RunSpec.from_dict(metadata["requests"][run_id])
+                        )
+                    if reference and reference["trajectory"] == "pruned":
+                        progress["trajectory"] = "pruned"
+                        completion = {"step": reference["completed_steps"]}
+                    else:
+                        progress["trajectory"] = "retained"
+                        completion = RunStore(path.parent).completion(target)
                     if completion is not None:
                         instance_id = read_json(path.parent / "metadata.json").get("instance_id")
                         if (
@@ -273,6 +292,12 @@ def iter_completed_runs(output_dir: str | Path) -> Iterator[tuple[RunSpec, RunRe
                     raise StorageError(f"Run provenance mismatch: {directory}")
         elif run_metadata["spec"]["run_id"] != run_spec.run_id:
             raise StorageError(f"Run identity mismatch: {directory}")
+        from .trajectories import pruning_receipt
+
+        if pruning_receipt(directory):
+            raise StorageError(
+                "Trajectory was intentionally pruned; use ews run to rematerialize required raw data"
+            )
         run_store = RunStore(directory)
         requested_steps = getattr(run_spec, "budget_steps", None)
         completion = run_store.completion(requested_steps, validate=False)

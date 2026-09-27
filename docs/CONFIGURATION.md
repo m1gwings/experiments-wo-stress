@@ -223,6 +223,10 @@ recording:
   every_steps: 1
   fields: null
   buffer_bytes: 16777216
+  retention: keep
+
+display:
+  timezone: UTC
 ```
 
 `--workers` and the Python API's `workers=` override the worker setting. Ordinary
@@ -232,13 +236,24 @@ processes. Python scripts starting process workers need the usual
 `if __name__ == "__main__":` guard. GPU execution also needs this guard with one
 worker.
 
-`ews run` automatically monitors execution on stderr: an interactive terminal
+`ews run` automatically monitors the pipeline on stderr: an interactive terminal
 gets a Rich dashboard with one row per worker process, while redirected output
 gets plain updates at most every 30 seconds. Failures are reported immediately;
 every invocation prints a final execution summary. `--quiet` disables continuous
 monitoring and its worker messages, keeping final summaries and errors. JSON
 stdout, file logging, and Discord delivery retain their separate roles. Rich
 respects `NO_COLOR`; terminal width controls name truncation and bar visibility.
+Rows identify simulation (`SIM`), per-run metric (`METRIC`), aggregation (`AGG`),
+or figure (`FIGURE`) work, its subject, elapsed time, and status. Progress and ETA
+appear only when meaningful; atomic derivations remain indeterminate. The summary
+keeps simulation outcomes and derived-task counts separate.
+
+`display.timezone` selects an installed IANA timezone, such as `Europe/Rome`.
+`ews run ... --timezone Europe/Rome` overrides YAML; otherwise YAML applies,
+with `UTC` as the default. There is no environment override. Finish estimates
+always include a timezone, for example `Finish ~13:08 CEST`. Invalid names fail
+clearly. This display choice never changes persisted UTC timestamps, scientific
+identities, random streams, compatibility, or cache reuse.
 
 Progress uses the protocol's completed `step` and requested `budget.steps`.
 Online/RL budgets count rounds/environment transitions; built-in offline fits
@@ -252,11 +267,13 @@ two seconds and 1% of new work. Global ETA uses the median of up to 32 observed
 completed-run durations, unfinished active fractions, queued work, and available
 worker concurrency. It waits at least five seconds and one completed execution;
 reused and failed runs do not train the estimate. Estimates are approximate,
-especially for heterogeneous runs or resumed prefixes. Dashboard completed
+especially for heterogeneous runs or resumed prefixes. Overall ETA remains
+indeterminate while derived work has no defensible duration estimate. Dashboard completed
 counts include reused results; the final summary lists reuse separately.
 
 The Python `run_experiment` API remains silent by default. Its optional
-`progress=` argument accepts an entered `TerminalProgress(name, workers)` context
+`progress=` argument accepts an entered `TerminalProgress(name, workers,
+timezone="Europe/Rome")` context
 from `experiments_wo_stress.execution.progress`; the CLI supplies this observer
 automatically. Monitoring state is temporary and never changes run identities,
 RNG streams, checkpoint contents, or failure/cancellation policy.
@@ -292,6 +309,21 @@ A different recording selection retains a separate variant. It may require new
 execution to obtain missing observations. Metrics that need every action or reward
 reject sparse trajectories; the library does not infer omitted data.
 
+`recording.retention` accepts `keep` (default) or `until_analyzed`. `keep` retains
+raw trajectories. `until_analyzed` still records every configured observation,
+then removes a completed run's result chunks once all currently configured
+per-run metrics are durably materialized and validated. It need not wait for
+aggregation or figures. Instances, provenance, checkpoint files, logs, and compute
+history remain. With no metrics configured, trajectories remain retained.
+
+Intentional pruning is recorded durably and differs from missing or corrupt
+data. Matching retained derived artifacts remain reusable after pruning. A changed
+metric needs its raw input again: `run` reuses it if retained, or rematerializes
+only the required simulations if pruned. Changing retention alone does not change
+scientific identity. Selecting `keep` after pruning requests raw materialization
+again. The [reuse rules](#metrics-aggregation-and-cache-reuse) describe the nearest
+retained ancestor behavior and saved-only commands.
+
 ### GPU execution
 
 For a study whose components use CUDA, add this execution fragment:
@@ -319,7 +351,8 @@ Each configured GPU belongs to one worker for that worker's entire lifetime.
 EWS establishes its single-device `CUDA_VISIBLE_DEVICES` before the spawned
 interpreter imports the main script or study components. Planning, component
 validation, and source inspection needed by execution also run in a GPU worker.
-Runs assigned later to that worker use the same GPU. The algorithm selects its
+Metric and custom plotter imports and constructor inspection also occur in an
+assigned worker. Runs and derivations assigned later use the same GPU. The algorithm selects its
 worker-local CUDA device, normally `cuda:0`; it needs neither the physical GPU
 ID nor scheduling code. The coordinator's environment is restored after launch.
 This boundary covers EWS execution imports; caller code imported before
@@ -356,8 +389,8 @@ immutable invocation and attempt records preserve the underlying history. The
 CLI prints a short resource summary to stderr, keeps its result JSON on stdout,
 and includes the report location. `ews inspect OUTPUT` also points to a saved
 summary. Separate `ews analyze` and `ews plot` commands do not create run
-invocation records. The Python `run_experiment` API records execution only;
-subsequent analysis calls are outside that invocation.
+invocation records. The Python `run_experiment` API includes configured pipeline
+work; separate subsequent analysis calls are outside that invocation.
 
 Environment records include the OS/kernel, architecture, CPU model, reliable
 physical and logical CPU counts, total machine RAM, effective worker count, and
@@ -375,16 +408,17 @@ Interpret the timing fields separately:
 
 | Measurement | Meaning |
 | --- | --- |
-| Invocation wall time | Elapsed time through execution and configured analysis/plotting, with UTC start/finish timestamps. Execution, analysis, and plotting durations are also recorded separately. |
-| Worker time | Sum of elapsed execution-attempt durations, including initialization/restoration, checkpointing, and component cleanup. Concurrent attempts add together: four workers active for one hour contribute about four worker-hours. |
+| Invocation wall time | Elapsed time through the dependency pipeline, with UTC start/finish timestamps. Simulation and derived tasks may overlap; their durations are not sequential stages. |
+| Worker time | Sum of elapsed task-attempt durations, separated by task kind. Simulation attempts include initialization/restoration, checkpointing, and component cleanup. Concurrent attempts add together: four workers active for one hour contribute about four worker-hours. |
 | CPU user/system time | Differences of process `resource.getrusage(RUSAGE_SELF)` counters around each attempt, including its process threads and excluding child processes. In an embedded single-worker application, unrelated threads in the same process can contribute. |
 | GPU time | Attempt wall time multiplied by the number of GPUs assigned by EWS. This is allocated accelerator time, not measured utilization; CPU-only execution contributes zero. |
 
 Worker-hours and process CPU-hours are not CPU-core-hours. No continuous
 utilization or memory sampling is performed, and the report does not claim an
-individual run's peak memory. With configured figures, `run` measures analysis
-first, then plots from those summaries without repeating analysis. Omitted
-stages have no duration.
+individual run's peak memory. Worker, process CPU, and allocated GPU totals can
+be compared by simulation, metric, aggregation, and figure task kind. Historical
+records retain their original sequential-stage measurements; new invocations
+record the overlapping pipeline as one elapsed interval.
 
 Resuming a run adds a new attempt; it never overwrites its earlier paused or
 failed attempt. Reusing a valid completion adds no simulation attempt compute.
@@ -554,6 +588,12 @@ budget change selects another variant. Scientific, code, dependency, and recordi
 changes retain distinct affected variants rather than mixing incompatible results.
 Other matching runs remain reusable.
 
+Extension requires a retained trajectory prefix and usable endpoint state. After
+intentional pruning, a new budget conservatively starts fresh when those inputs
+are unavailable. EWS does not assume that a retained metric curve composes
+incrementally or reconstruct deleted observations from it. Disposable trajectories
+therefore favor storage savings over guaranteed budget extension.
+
 Extension still respects the scientific input: a finite nonstationary schedule
 cannot provide observations beyond its last row. Changing or appending the schedule
 selects a new instance and run; existing schedule prefixes are not migrated.
@@ -634,7 +674,7 @@ deterministic, approximately equally spaced row positions with no duplicates,
 including the first and last; CSV column `x` retains the metric's actual
 coordinates, usually one-based protocol steps, rather than renumbering samples.
 
-Raw trajectories remain full-resolution binary `.npz` chunks at the requested
+While retained, raw trajectories are full-resolution binary `.npz` chunks at the requested
 recording frequency; no raw trajectory CSV is written. Metrics (including
 cumulative reward and regret), coordinate validation, and aggregation compute
 over every recorded observation before reducing the representation. Per-run
@@ -649,7 +689,28 @@ of this export setting.
 `ews analyze` writes summary tables under `analysis/` and reuses valid cached
 work. Only completed, validated runs contribute; summaries report their actual
 count. Input, code, parameter, or declared dependency changes invalidate affected
-analysis. See [analysis and cache invalidation](ARCHITECTURE.md#analysis-and-cache-invalidation)
+analysis. Recalculation follows dependencies backwards only to the nearest retained
+valid ancestor: a figure edit reuses its summaries, an aggregator edit reuses
+per-run metrics, and a metric edit reuses raw observations when retained. Valid
+derived artifacts carry enough dependency evidence to be reused without requiring
+intentionally deleted ancestors to remain on disk. Missing evidence triggers
+conservative recomputation.
+
+`run` computes per-run metrics as simulations finish. Each aggregate becomes
+runnable when its own repetitions are ready, even while unrelated simulations
+continue. Each existing figure interface receives all group summaries for its
+selected metric, so it waits for those groups. Ready metrics receive priority,
+with bounded aging for aggregation and figures so ready outputs cannot starve.
+Simulations favor partially completed aggregation
+groups derived from `group_by` and the supported `reduce_over` semantics. The
+scheduler admits simulation work regularly to prevent starvation. All task kinds
+share the configured worker pool, including workers with fixed GPU assignments.
+Scheduling never changes scientific identities or RNG streams.
+
+`analyze` and `plot` never launch simulations. If a necessary raw ancestor was
+pruned and retained derived artifacts cannot satisfy the request, they diagnose
+the missing input and direct you to `ews run`. See
+[analysis and cache invalidation](ARCHITECTURE.md#analysis-and-cache-invalidation)
 for cache identities and [cleanup](#run-inspect-and-clean) for removing derived
 artifacts.
 
@@ -676,14 +737,16 @@ Custom figure options belong in `params`.
 ews run examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
 ```
 
-`run` executes or resumes the study, reuses compatible completed work, and then
-produces configured analysis and figures. This final stage runs only when there
-are no failed, paused, or pending runs. An interrupted or deliberately paused
-invocation can resume with the same command.
+`run` executes or resumes the dependency pipeline and reuses compatible retained
+artifacts. Analysis and figures become runnable when their own durable inputs are
+ready; unrelated simulations do not impose a global barrier. A failed or paused
+ancestor prevents its dependents from running while independently completed
+artifacts remain reusable. Resume an interrupted or deliberately paused invocation
+with the same command. The Python `run_experiment` API follows the same workflow.
 
 CPU or GPU studies without analysis configuration perform execution only. A
-metrics-only configuration computes summaries; configured figures trigger the
-analysis they need and are then exported.
+metrics-only configuration computes summaries; configured figures consume their
+required summaries as those become available.
 
 An optional count helps estimate the work before an expensive study:
 
@@ -736,8 +799,7 @@ for recovery and artifact boundaries.
 
 ## Discord notifications
 
-Add an enabled Discord block to receive progress summaries during the execution
-stage of `run`:
+Add an enabled Discord block to receive simulation progress summaries during `run`:
 
 ```yaml
 notifications:
@@ -777,6 +839,12 @@ analysis, compute reports, and raw runs without hardcoding internal paths. Optio
 roles can have no files. This does not change recording, checkpoint, or analysis
 settings. See [the artifact contract](ARTIFACTS.md) for fields, publication, and
 legacy outputs; `inspect` continues to read old outputs without this file.
+
+For cloud backup and continuation, use the EWS-owned `create_snapshot`,
+`validate_snapshot`, and `restore_snapshot` functions from
+`experiments_wo_stress.storage`. The catalog alone is not a recovery contract.
+See [versioned recovery snapshots](CLOUD.md#versioned-recovery-snapshots) for the
+schema and publication procedure; no extra YAML setting is required.
 
 ## Portable continuation policy
 

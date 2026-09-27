@@ -109,9 +109,10 @@ The bind mount keeps output outside the container; the host path must itself be
 on persistent storage. Only one executor should write a given output directory.
 Use separate directories for separate studies.
 
-After all requested runs complete successfully, `run` computes the configured
-analysis and exports any configured figures. A paused or failed execution keeps
-its artifacts for resumption and does not start analysis.
+`run` schedules simulation, metric, aggregation, and figure work when their
+required artifacts are ready. Completed groups can produce summaries while
+unrelated simulations continue. A paused or failed invocation keeps its committed
+artifacts, including any completed derivations, for resumption.
 `count-runs` is an optional preview of study size; you do not need to invoke it
 before `run`.
 
@@ -146,9 +147,97 @@ docker run --rm \
 instead when only metrics or aggregation settings have changed and you want
 updated summaries from those results.
 
-Back up the complete output tree after stopping execution or at another
-consistent point. Object storage is suitable for backups, but the live output
-directory needs filesystem locking and atomic file replacement.
+Use the recovery snapshot API below to persist a consistent output boundary.
+Object storage is suitable for snapshots, but the live output directory needs
+filesystem locking and atomic file replacement. With
+`recording.retention: until_analyzed`, snapshots preserve the intentional deletion
+of trajectories alongside their retained metric artifacts. A changed metric
+whose raw input was deleted requires `ews run`; standalone `analyze` and `plot`
+never schedule simulations.
+
+## Versioned recovery snapshots
+
+EWS owns the recovery contract in
+[`storage/recovery.py`](../src/experiments_wo_stress/storage/recovery.py).
+Cloud wrappers, including `cloud-experiments`, should consume this API instead of
+parsing run directories or checkpoint layouts. The semantic catalog in
+[ARTIFACTS.md](ARTIFACTS.md) remains useful for selecting downloaded figures or
+reports; it is not a recovery inventory.
+
+After gracefully stopping the writer, create a snapshot on the local filesystem:
+
+```python
+from experiments_wo_stress.storage import (
+    create_snapshot,
+    restore_snapshot,
+    validate_snapshot,
+)
+
+snapshot = create_snapshot("/work/output", "/work/snapshots/attempt-001")
+manifest = validate_snapshot(snapshot)
+# Transfer recovery.json, listed output files, and recreate listed directories.
+# Download them into an isolated snapshot directory before restoring.
+restored = restore_snapshot("/work/downloaded-snapshot", "/work/restored-output")
+```
+
+Both destination directories must be new and outside their source tree. Creation
+holds EWS's exclusive experiment lock for validation and copying, and fails if an
+executor, standalone analysis/plot operation, or cleanup owns that lock. It does
+not pause a running invocation or provide snapshots of live writers. Direct file
+edits and custom writers must also be stopped. Snapshotting needs space for a
+second copy of retained artifacts; remote transfer can reuse identical checksums.
+
+A snapshot contains an `output/` directory and `recovery.json`. The manifest has:
+
+| Field | Meaning |
+| --- | --- |
+| `schema` | Exact identifier `experiments-wo-stress/recovery`. |
+| `schema_version` | Integer `1`; unsupported versions must be rejected. |
+| `snapshot_id` | SHA-256 of the canonical manifest contents without this field. |
+| `files` | Mapping of canonical POSIX paths relative to `output/` to `sha256` and byte `size`. |
+| `directories` | Canonical relative directory paths, including empty checkpoint payload directories. |
+| `omitted_checkpoints` | Run/generation identifiers and reasons for invalid committed checkpoint payloads excluded from this snapshot. |
+| `pruned_runs` | Storage identifiers whose valid intentional-pruning receipts are retained. |
+
+Paths are literal relative files, without empty, `.` or `..` components,
+backslashes, colons, nonprintable characters, or absolute roots. Payloads must be
+regular files; symbolic links and special files are rejected. The manifest and
+file hashes detect incomplete or damaged transfer; they are not an authentication
+mechanism. `validate_snapshot` verifies the version, manifest identity, exact
+file/directory inventory, sizes, and hashes. Cloud tools must not guess the meaning of a future
+version; use a compatible EWS reader instead. Additional manifest fields are
+included in `snapshot_id` and may be ignored by version-1 consumers.
+
+The snapshot is published atomically only after its files and manifest have been
+synchronized. Upload all listed payloads before publishing `recovery.json` as the
+remote commit marker, and expose a snapshot to consumers only after that upload
+succeeds. Failed transfers cannot replace the last complete remote snapshot.
+A downloader verifies the entire inventory before restoring. Restore writes to a
+temporary directory and atomically publishes a new output tree, never merges into
+an existing tree; this prevents old remote files from reviving pruned trajectories.
+
+EWS chooses which artifacts are committed. Checkpoint publication commits matching
+component/RNG state and result boundaries together. The snapshot retains validated
+referenced generations and their committed result chunks, including older fallback
+generations; unpublished generations and result tails are excluded. It validates
+checkpoint payload integrity without importing or invoking its saved backend.
+Unknown checkpoint envelope versions fail snapshot creation instead of being
+misclassified as missing state.
+An invalid newest generation is omitted and reported while unchanged progress
+metadata lets EWS recover a valid predecessor. Completed retained trajectories,
+instances, and published analysis caches must validate; corruption makes snapshot
+creation fail instead of certifying damaged results. Temporary files and pending
+analysis generations are never committed snapshot objects.
+
+Intentional-pruning receipts, required retained derivations, provenance, instances,
+and compute records travel together. Deleted result chunks remain absent. Retained
+checkpoint payloads for a pruned run are historical data, not permission to extend
+a run without its required prefix. A changed metric or larger budget may need a
+fresh simulation. References for previously analyzed budgets survive that replay,
+including interruption, so their retained derivations remain reusable after restore.
+After restore, EWS still performs its ordinary scientific,
+environment, dependency, variant, and checkpoint validation; byte integrity alone
+does not promise compatibility with a replacement VM or checkpoint decoder.
 
 ## Resources and compatibility
 
@@ -230,10 +319,13 @@ rather than its usable quota. EWS does not query cloud metadata services or infe
 a provider, instance SKU, billing rate, or tenancy. Record the provider, machine
 type, configured limits, and storage arrangement separately in the paper.
 
-End-to-end elapsed time includes configured analysis/plotting. Cumulative worker
-time adds the elapsed durations of attempts; allocated GPU-hours multiply each
-attempt's wall time by its assigned GPU count. Neither is CPU-core-hours or
-measured accelerator utilization. Process CPU time excludes descendants.
+End-to-end elapsed time includes the overlapping pipeline. Cumulative worker
+time adds simulation and derived-task attempt durations; separate task-kind
+totals describe work that can overlap, rather than consecutive elapsed stages.
+Allocated GPU-hours multiply each task attempt's wall time by its assigned GPU
+count, including derived tasks occupying an exclusively assigned GPU worker.
+Neither is CPU-core-hours or measured accelerator utilization.
+Process CPU time excludes descendants.
 Failed/paused attempts remain visible across retries, reused completions add no
 new simulation compute, and missing historical or abruptly terminated timings
 remain unknown. See the
@@ -246,7 +338,7 @@ The researcher remains responsible for disclosing broader project compute.
 
 ## Optional progress messages
 
-Discord summaries can report progress during the execution stage of `run`.
+Discord summaries can report simulation progress during `run`.
 Configure them as described in
 [Discord notifications](CONFIGURATION.md#discord-notifications), set
 `EWS_DISCORD_WEBHOOK_URL` in the VM environment, and add

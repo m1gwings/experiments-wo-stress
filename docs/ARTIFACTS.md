@@ -33,7 +33,8 @@ meanings are the discovery contract; the locations below describe today's layout
 - `kind` is `file` (exact object) or `directory` (its descendants). A directory
   may contain nested groups: `analysis` includes figures and derived caches.
   `runs` includes retained trajectories, checkpoints, progress, and per-run logs;
-  these are not separate top-level groups. `instances` holds immutable inputs,
+  these are not separate top-level groups. An intentionally pruned run can retain
+  metadata and checkpoints without trajectory chunks. `instances` holds immutable inputs,
   `requests` retained execution requests, and `compute` all compute history.
 - `compute_report` means the human-readable compute summary. Its absence is
   normal when reporting was unavailable; `compute` can also be absent.
@@ -76,3 +77,5 @@ package version. Its separate run manifest continues to record the exact EWS
 commit. Consult the current
 [cloud-experiments README](https://github.com/m1gwings/cloud-experiments)
 and CLI help for retrieval syntax and limits (including its 64 KiB catalog cap).
+
+Recovery and replication safety use the separate versioned [recovery snapshot contract](CLOUD.md#versioned-recovery-snapshots). The discovery catalog is not a substitute for that commit inventory.

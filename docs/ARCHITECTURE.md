@@ -47,19 +47,24 @@ The source tree follows six responsibilities:
 | `analysis/` | General metric contracts and field metrics, repeated-run aggregation, validated caches, and figure export. |
 
 `ExecutionCoordinator` plans one invocation, publishes its prepared request, and
-schedules bounded work while owning signals and notifications. Each worker creates
+schedules bounded work while owning signals and notifications. One compact durable
+request describes the plan; per-variant metadata is published just before first
+use. Repeated source files are fingerprinted once per preparation. No per-run
+filesystem materialization is required merely to plan a large grid. Each worker creates
 a `RunSession`, which owns its components, RNGs, recorder, and checkpoint lifecycle.
 The process-pool entry point remains a module-level function.
 
 GPU execution adds a focused resource owner in `execution/resources.py`. With
 `execution.gpu_ids` present, it launches one persistent spawned process per
 configured GPU, including the one-worker case. The coordinator submits at most
-one run at a time to each worker. GPU visibility is inherited at process launch,
+one simulation or derivation task at a time to each worker. GPU visibility is inherited at process launch,
 before spawn reimports the main script; a pool initializer would run too late
 to protect against a framework imported there. Each process retains its mask
 for its lifetime and constructs fresh components for each run. Execution's
 planning, preflight checks, and source inspection take place in the first GPU
 worker so they cannot initialize a scientific framework in the coordinator.
+Metric and plotter preparation also stays in an assigned worker; only plain
+dependency descriptors return to the coordinator.
 Scientific algorithms use their worker-local device, normally `cuda:0`.
 This execution boundary does not control study code the caller imported before
 `run_experiment`; `ews count-runs` can import a custom planner in its own
@@ -88,7 +93,7 @@ store. `RunStore` owns one variant's durable boundaries; `Recorder` buffers its
 observations. `AnalysisCache` handles immutable cache generations and exports,
 while metric computation and aggregation remain in the analysis pipeline.
 
-`execution/progress.py` observes these existing execution paths. Workers send
+`execution/progress.py` observes simulation and derived worker tasks. Workers send
 small snapshots through a bounded multiprocessing queue at most four times per
 second, with forced terminal updates. Saturated monitoring queues may discard
 snapshots; coordinator results remain authoritative for counts and final 100%
@@ -98,8 +103,10 @@ custom protocols may supply `total_steps` when no budget is known.
 
 The CLI owns `TerminalProgress`, whose single parent-side display thread drains
 snapshots and updates Rich or periodic plain stderr lines. This also refreshes
-elapsed time while a sequential fit blocks inside one operation. Rows are keyed
-by process ID and replaced on worker reuse. The context closes the display and
+elapsed time while a sequential fit blocks inside one operation. Rows show task kind, subject, elapsed time, and defensible progress/ETA. They are
+keyed by process ID and replaced on worker reuse. Wall-clock finish estimates
+always include the selected IANA timezone; UTC remains the timestamp standard
+for persisted records. The context closes the display and
 queue on success, failure, or interruption; workers never render. Notifications
 continue to use their independent sparse sender and durable checkpoint readings.
 
@@ -154,7 +161,7 @@ component's fingerprint. These rules do not exempt library implementation edits
 from the existing conservative compatibility checks.
 
 Library fingerprints cover the implementation files in the new packages, rather
-than their compatibility facades. The architecture refactor therefore selects new
+than their compatibility facades. The dependency-scheduler redesign therefore selects new
 simulation and analysis variants conservatively. Existing artifact schemas and
 readers are unchanged; retained results remain inspectable and analyzable with
 their matching saved configuration.
@@ -219,6 +226,7 @@ output/
     results/                      numerical chunks
     checkpoints/                  component and RNG snapshots
     progress.json                 committed boundaries and budgets
+    trajectory.json               intentional pruning proof, when pruned
     failure.json                  latest failure, when present
     run.log                       rotating diagnostics
   analysis/
@@ -311,14 +319,12 @@ Resource ownership stays in `execution/resources.py`. Observation belongs to
 and durable compute records and aggregation to `execution/compute_report.py`.
 These modules do not interpret scientific observations or modify checkpoints.
 
-The CLI starts an invocation before execution and closes it after configured
-analysis and plotting, including failure paths. A decorator on
-`ExecutionCoordinator.run` measures the execution stage and supplies an
-execution-only invocation for direct Python API calls. The CLI measures analysis
-before passing its summaries to the internal `export_figures` boundary, so
-plotting does not repeat analysis. The public `plot` API still performs both.
-Invocation records retain UTC timestamps, elapsed stage durations, worker count,
-machine information, and completed/reused/paused/failed/pending counts.
+The CLI and Python execution API observe one complete pipeline invocation. Its
+elapsed time includes orchestration and overlapping task execution. Each actual
+simulation, metric, aggregate, or figure attempt has its own elapsed and process
+CPU cost; totals by task kind are cumulative worker costs, not sequential stage
+durations. Historical records with sequential stages remain readable. Invocation
+records retain UTC timestamps, worker count, run outcomes and derived failures.
 
 A decorator on `execute_run` brackets each worker call, including restoration,
 initialization, checkpoint publication, and component cleanup. Its process CPU
@@ -328,8 +334,8 @@ not lifetime totals. Unrelated threads can contribute in an embedded application
 using the single in-process worker. No process-lifetime peak RSS is presented as
 an individual run's peak; memory reporting is machine RAM capacity only.
 
-Each attempt references its scientific run, stored variant, group, algorithm,
-and invocation. A reused completion contributes no new simulation compute.
+Simulation attempts reference their scientific run, stored variant, group,
+algorithm, and invocation. Derived attempts identify their task kind and subject. A reused completion contributes no new simulation compute.
 GPU assignments come from the worker's existing fixed resource allocation;
 attempt elapsed seconds multiplied by allocated GPU count gives GPU-seconds.
 This excludes utilization claims and is not a measurement of the worker's idle
@@ -396,17 +402,76 @@ simulation or unaffected metric; a metric edit invalidates its result and
 downstream work. Analysis remains independent of simulation imports, although
 custom metrics and plotters may import their own code.
 
+## Dependency scheduling and retained ancestors
+
+The central rule is **recompute backwards only until the nearest retained valid
+ancestor**. The graph contains a simulation input for each selected run, a metric
+artifact for each run/metric pair, an aggregate for each metric/group, and a figure
+for each configured output. Aggregator `group_by` and repetition reduction define
+the units; there are no paper-specific scheduling assumptions. Figure dependencies
+cover every group of the selected metric, matching the existing plotter contract.
+
+Workers share these task classes. Ready raw-consuming metrics have priority,
+with bounded aging for aggregates and figures so a metric backlog cannot starve
+ready outputs. Simulations favor analysis units with completed
+or active members; a bounded derivation streak ensures forward simulation progress.
+Scientific IDs and RNG streams never include admission order or progress observations.
+Aggregation reads metrics in canonical run order, so worker completion order cannot
+change floating-point reduction order. Derived publication synchronizes files before
+an atomic generation rename. Only that durable publication releases dependents.
+
+Each cache identity includes the exact upstream revisions and relevant science,
+code, options and declared dependencies. Expected downstream identities can be
+calculated without physically reading an ancestor. A retained valid aggregate
+therefore does not require its metrics or raw observations to remain present.
+A figure change traverses only as far as its retained summaries; an aggregator
+change traverses to metrics; a metric change traverses to its raw trajectory.
+Absence of proof requires the ancestor. Corrupt retained artifacts are reported,
+not silently accepted as reuse. Combined summary tables are exported on successful
+pipeline completion; individual aggregate generations and ready figure exports
+become durable earlier.
+
+`recording.retention: keep` preserves raw observations. With `until_analyzed`,
+all currently configured per-run metrics must first have valid durable artifacts.
+EWS then publishes a checksummed pruning receipt preserving completed input
+revisions before removing result chunks. An interrupted deletion is still an
+intentional state; unmarked missing or corrupt chunks remain damage. Instances,
+provenance, checkpoints, and compute history are retained. Exact budget references
+survive rematerialization so earlier retained derivations can remain reusable
+while a later budget is being replayed. A prefix-only request
+never deletes the unanalysed tail of a longer completed run.
+
+New metric work may need an intentionally pruned ancestor. Only `run` can
+rematerialize it with fresh component state and the original streams. Endpoint
+snapshots whose recorded prefix was removed do not authorize continuation; budget
+extension falls back to a fresh simulation. Metrics are recomputed from full
+requested trajectories rather than assumed incrementally composable. Standalone
+`analyze` and `plot` report the missing dependency and direct the user to `ews run`.
+
+## Recovery snapshots
+
+The EWS-owned [cloud recovery contract](CLOUD.md#versioned-recovery-snapshots)
+seals a snapshot under output ownership, inventories committed regular files,
+and publishes a versioned checksum manifest. Cloud wrappers transfer those bytes
+and publish the manifest last. Restoration verifies the complete inventory into
+a new output tree; normal EWS compatibility and checkpoint fallback remain
+responsible for reuse. Pruning receipts are preserved and excluded temporary or
+uncommitted objects cannot be mistaken for durable ancestors. The semantic
+[artifact catalog](ARTIFACTS.md) continues to describe discovery locations, not
+recovery safety. Live-writer snapshots and object-store execution are unsupported.
+
 ## Operational boundaries
 
 The CLI exposes `count-runs`, `run`, `analyze`, `plot`, `inspect`, and `clean`.
-`run` coordinates execution and then configured analysis and figures, proceeding
-to that final stage only when no work failed, paused, or remained pending.
+`run` coordinates the dependency graph; failed or paused work blocks only its
+dependent tasks. Independent ready work can complete and remain reusable.
 `count-runs` optionally reports the study name and number of planned runs; it is
 never a prerequisite for execution. Internal `plan_runs` remains the shared run
 expansion and validation operation. `analyze` and `plot` also work independently
 on saved numerical results, allowing expensive simulations to be reused while
-metrics and figures change. The Python `run_experiment` API retains its execution
-responsibility; CLI composition does not merge the execution and analysis owners.
+metrics and figures change. The Python `run_experiment` API schedules the same
+configured graph. Analysis science remains separate from scheduling and reads
+only persisted inputs.
 
 Discord progress delivery runs in the coordinator, outside workers and protocol
 steps. Its settings do not enter scientific identities or RNG streams, and
@@ -414,9 +479,8 @@ network errors do not fail simulations. Delivery is best effort; saved artifacts
 remain authoritative.
 
 `ews clean` previews deletion and requires `--yes` to apply it. Removing
-checkpoints leaves numerical observations but loses continuation state. Analysis
-and plotting do not hold the execution lock, so cleanup should run while those
-operations are idle. The
+checkpoints leaves numerical observations but loses continuation state. Execution, standalone analysis/plotting, cleanup, and recovery snapshots share
+the output lock. The
 [configuration guide](CONFIGURATION.md#run-inspect-and-clean) lists cleanup
 scopes. Compute records survive selective run cleanup, including records of
 removed variants; the `all` scope removes them together with other artifacts.
@@ -433,8 +497,8 @@ study-owned checkpoint backends implement those representations explicitly.
 `execution/portability.py` owns the explicit `portable-numpy-v1` environment
 signature. `collect_provenance` chooses it only for `execution.continuation:
 portable_numpy`; the policy's own source digest is part of the implementation
-signature. The reviewed provenance digest bridge preserves strict-mode existing
-variants because that branch is unchanged. Portable mode remains distinguished
+signature. Unknown implementation changes conservatively select new variants; historical
+exact-digest bridges do not exempt this scheduler redesign. Portable mode remains distinguished
 by its environment and additional policy digest. All ordinary scientific,
 source/input, recording, budget, checkpoint and variant validation still applies.
 See [PORTABILITY.md](PORTABILITY.md) for exact fields and unsupported backends.

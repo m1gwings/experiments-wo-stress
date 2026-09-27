@@ -29,8 +29,8 @@ Read these files in order on a first pass:
 5. [The run session](../src/experiments_wo_stress/execution/worker.py):
    read `RunSession.run`, then the methods it calls. This wraps interaction in
    initialization, recording, checkpointing, and completion.
-6. [The analysis pipeline](../src/experiments_wo_stress/analysis/pipeline.py):
-   read `analyze` to see how saved runs become metrics and grouped summaries.
+6. [The dependency graph](../src/experiments_wo_stress/analysis/graph.py):
+   read `AnalysisGraph` to see how durable inputs release metrics, aggregates, and figures.
 
 For the first pass, postpone the details of fingerprints, atomic files, and
 notification retries. Return to them using the routes below after the complete
@@ -46,9 +46,9 @@ Most implementation lives in six packages under
 | [`study`](../src/experiments_wo_stress/study/) | Validated configuration, concrete run descriptions, planning, and deterministic random streams. | `ExperimentConfig`, `ComponentSpec`, `RunSpec`, `GridPlanner`, `make_rngs`. |
 | [`components`](../src/experiments_wo_stress/components/) | Interfaces for study code and the loading of configured classes. | `Feedback`, `InteractionProtocol`, `construct`, `create_instance`. |
 | [`builtins`](../src/experiments_wo_stress/builtins/) | Supplied protocols, data generators, environments, and bandit metrics. | `OnlineProtocol`, `CSVDataGenerator`, `StationaryBandit`, `PseudoRegretMetric`. |
-| [`execution`](../src/experiments_wo_stress/execution/) | One invocation's scheduling, GPU allocation, compute reporting, and each run's component lifecycle. | `ExecutionCoordinator`, `PreparedRequest`, `RunSession`, `RunReport`. |
+| [`execution`](../src/experiments_wo_stress/execution/) | One invocation's scheduling, GPU allocation, compute reporting, and each run's component lifecycle. | `ExecutionCoordinator`, `TaskScheduler`, `PreparedRequest`, `RunSession`, `RunReport`. |
 | [`storage`](../src/experiments_wo_stress/storage/) | Saved instances, result records, checkpoint representations, publication, validation, and cleanup. | `Instance`, `RunResult`, `ExperimentStore`, `RunStore`, `CheckpointBackend`, `Recorder`. |
-| [`analysis`](../src/experiments_wo_stress/analysis/) | The metric interface, aggregation, derived caches, and figure export. | `MetricResult`, `Summary`, `AnalysisCache`, `analyze`, `plot`. |
+| [`analysis`](../src/experiments_wo_stress/analysis/) | The metric interface, aggregation, derived caches, and figure export. | `AnalysisGraph`, `MetricResult`, `Summary`, `AnalysisCache`, `analyze`, `plot`. |
 
 [`__init__.py`](../src/experiments_wo_stress/__init__.py) lists the convenient
 public imports. Historical modules such as
@@ -65,7 +65,7 @@ while counting is an optional inspection step:
 | Command | Internal route |
 | --- | --- |
 | `count-runs` | `load_config` and `plan_runs`, returning only `name` and `runs`. No execution or output directory is needed. |
-| `run` | `_run_study` in `cli.py` starts compute observation, calls `run_experiment`, then `analyze` and configured `export_figures` after all requested work completes or is reused. Failed, paused, or pending runs prevent analysis; without analysis configuration it performs execution only. |
+| `run` | `_run_study` starts compute and terminal observers; `run_experiment` schedules simulations and configured derivations as dependencies become durable. Failed or paused work blocks its dependents. |
 | `analyze` | `analysis/pipeline.py:analyze`, reading saved numerical results and reusing valid metric and aggregate caches. |
 | `plot` | `analysis/figures.py:plot`, computing or reusing analysis and exporting configured figures from saved data. |
 | `inspect` | `storage/experiment.py:inspect_experiment`, reporting saved progress and validating completed runs; the CLI also points to the compute summary. |
@@ -129,7 +129,8 @@ The reuse calculation lives in
 `prepare_request` produces a `PreparedRequest`, mapping scientific run IDs to
 stored variants. `ExperimentStore` in
 [`storage/experiment.py`](../src/experiments_wo_stress/storage/experiment.py)
-publishes those variants and selects the active request.
+selects the durable active request. The coordinator publishes each variant only
+when its first task is admitted, leaving large unscheduled plans unmaterialized.
 
 These identifiers answer different questions:
 
@@ -149,62 +150,59 @@ in `execution/compatibility.py`; unrecognized execution-source changes retain th
 conservative behavior. Standalone reporting modules are outside these identities.
 The same bridge preserves figure caches for the reviewed export-boundary refactor.
 
+### Follow dependency admission and recovery
+
+Read [`execution/scheduler.py`](../src/experiments_wo_stress/execution/scheduler.py)
+for `TaskScheduler`: it owns pending/active work, group preference, and bounded
+fairness. `AnalysisGraph` in
+[`analysis/graph.py`](../src/experiments_wo_stress/analysis/graph.py) owns dependency
+identities and readiness, stopping at validated retained ancestors. Worker resource
+ownership remains in the coordinator and `execution/resources.py`; derived tasks
+share those workers without accessing live simulation objects.
+The graph's `_dependency_implementation` fingerprints its output, input-payload,
+and identity transformations separately from progress counters and task labels.
+
+[`storage/trajectories.py`](../src/experiments_wo_stress/storage/trajectories.py)
+separates completed input references, raw loading, intentional pruning, and fresh
+rematerialization. Read `prune_trajectory` for marker-before-delete ordering and
+`rematerialize_trajectory` for conservative handling of missing prefixes while
+preserving earlier completed-budget references.
+[`storage/recovery.py`](../src/experiments_wo_stress/storage/recovery.py) owns the
+external snapshot/restore contract; it inventories committed boundaries without
+importing checkpoint decoders. See [the cloud contract](CLOUD.md#versioned-recovery-snapshots)
+for consumer responsibilities.
+
 ### Follow automatic compute reporting
 
-Compute reporting observes lifecycle boundaries without owning scheduling or
-scientific state. Follow these files in order:
+Compute observation does not own resources, dependencies, or scientific state:
 
-1. `_run_study` in [`cli.py`](../src/experiments_wo_stress/cli.py) starts the
-   invocation before execution. It times analysis and plotting separately and
-   finalizes the report on success or failure. It passes analyzed summaries to
-   `export_figures`, avoiding a second analysis pass. The JSON result stays on stdout; a
-   concise resource summary goes to stderr.
-2. [`execution/compute.py`](../src/experiments_wo_stress/execution/compute.py)
-   supplies invocation state and the decorators on `ExecutionCoordinator.run`
-   and `execute_run`. The coordinator decorator measures execution and creates
-   an execution-only invocation when the Python API is used directly. The worker
-   decorator brackets setup/restoration, execution, checkpointing, and cleanup.
-   Reused completion checks contribute no new simulation attempt compute.
-3. [`execution/compute_environment.py`](../src/experiments_wo_stress/execution/compute_environment.py)
-   collects Linux/macOS platform, CPU, RAM, filesystem, and optional accelerator
-   information. System-query failures leave fields unavailable; Windows skips
-   reporting. Hardware inspection never imports a GPU framework or queries cloud
-   metadata services.
-4. Compare worker observation with the fixed leases in
-   [`execution/resources.py`](../src/experiments_wo_stress/execution/resources.py).
-   The current worker assignment supplies allocated GPU count. Elapsed attempt
-   time × count gives allocated GPU-seconds, not sampled utilization. Process
-   CPU user/system deltas include process threads, exclude descendants, and are
-   distinct from cumulative elapsed worker time.
-5. [`execution/compute_report.py`](../src/experiments_wo_stress/execution/compute_report.py)
-   publishes unique immutable records under `compute/invocations/` and
-   `compute/attempts/`, using the existing atomic file utilities. A start record
-   without a finish preserves evidence of an unresolved attempt with unknown
-   duration. Resuming adds an attempt instead of overwriting one.
-6. Continue through aggregation in that report module to `compute/summary.json`
-   and `compute/summary.md`. These replaceable summaries combine known attempts,
-   distinguish completed from failed/paused compute, count missing historical
-   timing, and summarize attempt durations by group/algorithm. Artifact size is
-   scanned once during finalization. A successful resumed attempt is only part
-   of a scientific run, so attempt statistics are labelled accordingly.
-7. Return to `collect_provenance` and `prepare_request` in
-   [`execution/provenance.py`](../src/experiments_wo_stress/execution/provenance.py),
-   then [`execution/compatibility.py`](../src/experiments_wo_stress/execution/compatibility.py).
-   Compute records never enter run IDs, RNGs, variant identities, or analysis
-   cache keys. Exact reviewed reporting-only edits retain earlier execution and
-   figure-export fingerprints; other implementation edits still invalidate conservatively.
+1. [`execution/compute.py`](../src/experiments_wo_stress/execution/compute.py)
+   owns the invocation's pipeline clock and simulation/derivation attempt clocks.
+   Attempts retain task kind, elapsed worker time, process CPU deltas, and allocated
+   GPU time. Reuse adds no new task compute. Concurrent task costs accumulate;
+   they are not sequential stages.
+2. [`execution/compute_environment.py`](../src/experiments_wo_stress/execution/compute_environment.py)
+   collects best-effort Linux/macOS hardware observations independently of GPU
+   allocation in `execution/resources.py`; Windows skips reporting.
+3. [`execution/compute_report.py`](../src/experiments_wo_stress/execution/compute_report.py)
+   publishes immutable attempt and invocation history, then regenerates human and
+   machine-readable summaries. Simulation coverage excludes derived task attempts.
+   Unknown or unresolved timing remains unknown; totals cover this output tree.
+4. [`execution/compatibility.py`](../src/experiments_wo_stress/execution/compatibility.py)
+   retains only exact historical observational mappings. New execution-source
+   edits invalidate conservatively. Reporting and display modules stay outside
+   scientific and cache identities.
 
-The report scopes every total to records in this output directory. Missing
-history remains unknown, and the researcher must account for other project
-compute. Measurement definitions are in
+Measurement definitions live in
 [automatic compute reporting](CONFIGURATION.md#automatic-compute-reporting).
 
 ### Follow live terminal progress
 
 [`execution/progress.py`](../src/experiments_wo_stress/execution/progress.py)
-contains the worker snapshot, throttled `ProgressReporter`, and parent-owned
-`TerminalProgress`. `RunSession` observes completed steps; the coordinator supplies
-submitted runs and authoritative outcomes. A bounded multiprocessing queue carries
+contains the task-aware worker snapshot, throttled `ProgressReporter`, and
+parent-owned `TerminalProgress`. `RunSession` observes completed steps; derived
+tasks report their kind/subject without invented numerical progress. The coordinator
+supplies submitted work and authoritative outcomes. A bounded multiprocessing queue carries
 snapshots for CPU and GPU workers without changing either scheduler. One display
 thread refreshes Rich or plain stderr while scientific work proceeds. Inspect
 `WorkerProgress.eta` and `TerminalProgress.remaining` for attempt-aware and global
@@ -373,7 +371,10 @@ They consume saved instances and observations through the same metric interface.
 Inspect their required data and comparator before using them for a paper.
 
 In [`analysis/pipeline.py`](../src/experiments_wo_stress/analysis/pipeline.py),
-`analyze` selects metrics and creates or reuses per-run results.
+`analyze` routes current outputs through `AnalysisGraph`, retaining the legacy
+schema reader separately.
+[`analysis/metric_tasks.py`](../src/experiments_wo_stress/analysis/metric_tasks.py)
+owns scientific per-run metric computation and its independent source identity.
 `_aggregate_metrics` groups compatible repetitions; `_RepetitionAccumulator`
 updates the mean and squared deviations without keeping every run in memory.
 Each `Summary` holds coordinates, mean, uncertainty, labels, and repetition count.
@@ -385,8 +386,8 @@ remain intact; CSV and figures retain the selected original coordinates.
 `AnalysisCache`, which validates and publishes derived generations.
 [`analysis/figures.py`](../src/experiments_wo_stress/analysis/figures.py) turns
 summaries into Matplotlib or TikZ output, or calls a custom plotter. Its public
-`plot` entry point analyzes results, then calls the internal `export_figures`
-boundary that the CLI uses for a separately timed plotting stage. Reading saved
+`plot` entry point requests figure targets from the same dependency graph;
+`export_figures` remains the legacy saved-summary export boundary. Reading saved
 results and producing standard figures does not require constructing the study's
 simulation components.
 
@@ -408,7 +409,7 @@ simulation components.
 
 ## Use the tests as worked examples
 
-The suite uses `unittest.TestCase` classes and runs with pytest. Module docstrings
+The suite uses behavior-focused pytest functions and `unittest.TestCase` classes. Module docstrings
 state the area covered, class docstrings describe a related group of behaviors,
 and individual scenario names explain the expected result. Read the local setup,
 the operation under test, and the assertions together. Small fake components keep
@@ -416,6 +417,11 @@ the interaction visible; temporary directories isolate persisted artifacts.
 
 | Test file | What it demonstrates |
 | --- | --- |
+| [test_scheduler.py](../tests/test_scheduler.py) | Lazy variant publication, source hashing, group completion preference, and simulation fairness. |
+| [test_pipeline_execution.py](../tests/test_pipeline_execution.py) | Retention, rematerialization, budget fallback, worker-independent results, and raw corruption boundaries. |
+| [test_dependency_analysis.py](../tests/test_dependency_analysis.py) | Nearest retained ancestor reuse, separate invalidation, and per-group readiness. |
+| [test_display.py](../tests/test_display.py) | IANA timezone precedence, deterministic display, and observational configuration. |
+| [test_recovery.py](../tests/test_recovery.py) | Versioned snapshot inventories, safe restoration, fallback, pruning, and unsupported versions. |
 | [test_study.py](../tests/test_study.py) | Configuration validation, planner output, stable identities, and independent random streams. |
 | [test_components.py](../tests/test_components.py) | Component loading, aliases, constructor validation, and injected capabilities. |
 | [test_protocols.py](../tests/test_protocols.py) | Online feedback boundaries, offline fitting, and callable trials. |
@@ -492,4 +498,5 @@ Read `execution/portability.py` with `execution/provenance.py` for the opt-in CP
 NumPy compatibility policy. `tests/test_portability.py` exercises checkpoint
 reuse on replacement hosts and conservative invalidation. See
 [PORTABILITY.md](PORTABILITY.md) for the public contract; cloud persistence and
-environment installation are owned by the separate cloud-experiments repository.
+environment installation are owned by the separate cloud-experiments repository;
+EWS owns the recovery snapshot interface it consumes.
