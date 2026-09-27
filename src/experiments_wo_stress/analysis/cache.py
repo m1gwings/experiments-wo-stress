@@ -8,12 +8,14 @@ import re
 import shutil
 import sys
 import tempfile
+import zipfile
 from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import Any
 
 import numpy as np
 
+from ..execution.compatibility import implementation_digest
 from ..storage.files import atomic_json, digest_file, fingerprint, read_json, sync_directory
 
 
@@ -56,11 +58,35 @@ def cache_identity(kind: str, **values: Any) -> dict[str, Any]:
     return {
         "schema_version": 1,
         "kind": kind,
-        "cache_implementation": digest_file(Path(__file__)),
+        "cache_implementation": implementation_digest(
+            "analysis/cache.py", digest_file(Path(__file__))
+        ),
         "numpy": np.__version__,
         "python": list(sys.version_info[:3]),
         **values,
     }
+
+
+def _compress_metric_result(path: Path) -> None:
+    """Losslessly repack a complete metric NPZ before its cache is published."""
+    descriptor, temporary = tempfile.mkstemp(prefix=".metric-", suffix=".npz", dir=path.parent)
+    try:
+        with os.fdopen(descriptor, "wb") as stream:
+            with (
+                zipfile.ZipFile(path) as source,
+                zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive,
+            ):
+                for member in source.infolist():
+                    with (
+                        source.open(member) as values,
+                        archive.open(member.filename, "w") as target,
+                    ):
+                        shutil.copyfileobj(values, target)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, path)
+    finally:
+        Path(temporary).unlink(missing_ok=True)
 
 
 class AnalysisCache:
@@ -124,6 +150,11 @@ class AnalysisCache:
         temporary = Path(tempfile.mkdtemp(prefix=".pending-", dir=parent))
         try:
             writer(temporary)
+            # Compression changes representation only; published generations and
+            # their identities remain immutable, including older uncompressed ones.
+            metric_result = temporary / "result.npz"
+            if collection == "metrics" and metric_result.is_file():
+                _compress_metric_result(metric_result)
             # A published generation is a durable dependency, including files
             # produced by custom plotters rather than our atomic writers.
             for path in temporary.rglob("*"):

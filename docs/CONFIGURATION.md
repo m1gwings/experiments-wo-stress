@@ -678,7 +678,8 @@ While retained, raw trajectories are full-resolution binary `.npz` chunks at the
 recording frequency; no raw trajectory CSV is written. Metrics (including
 cumulative reward and regret), coordinate validation, and aggregation compute
 over every recorded observation before reducing the representation. Per-run
-metric caches also retain full-resolution `.npz` curves. Changing `points`
+metric caches retain full-resolution `.npz` curves with lossless compression.
+Older uncompressed caches remain readable and reusable. Changing `points`
 reuses these metrics and simulations and versions aggregate/figure outputs.
 Existing configurations now get compact curves by default; `points: null`
 restores the previous full-resolution analysis behavior. A table with multiple

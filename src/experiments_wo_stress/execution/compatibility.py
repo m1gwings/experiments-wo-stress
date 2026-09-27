@@ -13,7 +13,12 @@ from __future__ import annotations
 # checkpoint persistence, RNG, or numerical result-format changes. The portable
 # environment branch is separately opt-in and fingerprints its policy module;
 # strict-mode provenance retains its preceding compatibility digest.
+# The metric cache bridge changes ZIP storage only; decoded arrays and keys are unchanged.
 _OBSERVATIONAL_REVISIONS = {
+    "analysis/cache.py": (
+        "67cc05a21899d99a9e0edc2409341733546ebde6013fd5be359a28dfe4ad08e4",
+        "c09be47b7c6b2d28c8e08095e3369a09ea1fbc8b7e701afcc836e16c7372444f",
+    ),
     "analysis/pipeline.py": (
         "a5bd774ccbfae39e10a4d8251fa11463155ac8e3b27ad8812a7be61d2f8c31bd",
         "06df1e1844a8b1d3331b6c85fbb15f27c771a7328b5dc3f158bec9a69b56df51",

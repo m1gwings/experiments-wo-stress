@@ -6,6 +6,7 @@ rematerialization. Scheduler policy and graph traversal have separate unit tests
 
 from __future__ import annotations
 
+import zipfile
 from collections import Counter
 from copy import deepcopy
 from pathlib import Path
@@ -230,20 +231,55 @@ class DependencyReuseTests(_PipelineCase):
         self.assertFalse(kinds)
         self.assertEqual(inspect_experiment(output)["counts"]["completed"], 2)
 
-    def test_restored_pruned_output_reuses_completed_pipeline(self) -> None:
-        config = self.load_study_config(self.pipeline_settings())
+    def test_new_metric_caches_compress_full_resolution_arrays(self) -> None:
+        settings = self.pipeline_settings()
+        settings["analysis"]["points"] = 2
+        config = self.load_study_config(settings)
         output = self.root / "output"
         report, _ = self.run_with_task_counts(config, output)
+        self.assertEqual(report.completed, 2)
+        metric_files = sorted((output / "analysis" / "cache" / "metrics").glob("*/result.npz"))
+        self.assertEqual(len(metric_files), 2)
+        for path in metric_files:
+            with zipfile.ZipFile(path) as archive:
+                self.assertEqual(
+                    {entry.compress_type for entry in archive.infolist()}, {zipfile.ZIP_DEFLATED}
+                )
+            with np.load(path) as metric:
+                self.assertEqual(metric["x"].size, 6)
+                self.assertEqual(metric["values"].size, 6)
+        summaries = analyze(config, output)
+        self.assertEqual(len(summaries), 1)
+        self.assertEqual(summaries[0].x.size, 2)
+        self.assert_pruned(output)
+
+    def test_restored_pruned_output_reuses_legacy_uncompressed_metrics(self) -> None:
+        config = self.load_study_config(self.pipeline_settings())
+        output = self.root / "output"
+        with patch("experiments_wo_stress.analysis.cache._compress_metric_result"):
+            report, _ = self.run_with_task_counts(config, output)
         self.assertEqual(report.completed, 2)
         snapshot = create_snapshot(output, self.root / "snapshot")
         restored = restore_snapshot(snapshot, self.root / "restored")
         self.assert_pruned(restored)
+        metric_files = sorted((restored / "analysis" / "cache" / "metrics").glob("*/result.npz"))
+        self.assertEqual(len(metric_files), 2)
+        for path in metric_files:
+            with zipfile.ZipFile(path) as archive:
+                self.assertEqual(
+                    {entry.compress_type for entry in archive.infolist()}, {zipfile.ZIP_STORED}
+                )
         for directory in self.variants(restored):
             self.assertFalse((directory / "results").exists())
         report, kinds = self.run_with_task_counts(config, restored)
         self.assertEqual((report.completed, report.skipped), (0, 2))
         self.assertFalse(kinds)
         self.assert_pruned(restored)
+        for path in metric_files:
+            with zipfile.ZipFile(path) as archive:
+                self.assertEqual(
+                    {entry.compress_type for entry in archive.infolist()}, {zipfile.ZIP_STORED}
+                )
 
     def test_figure_and_aggregation_changes_stop_at_their_retained_inputs(self) -> None:
         settings = self.pipeline_settings()

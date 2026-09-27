@@ -379,9 +379,10 @@ repetition has no defined sample standard deviation or standard error.
 Supplied regret metrics subtract and accumulate in float64, independently of the
 saved reward dtype, so boolean and integer inputs retain signed regret gaps.
 
-Per-run metrics and their binary caches retain full resolution. After full
-aggregation and coordinate validation, the pipeline selects at most
-`analysis.points` positions per summary (default 100). Rounded evenly spaced
+Per-run metric caches retain full resolution in losslessly compressed `.npz`
+files. Existing uncompressed cache generations stay valid and are reused without
+rewriting them. After full aggregation and coordinate validation, the
+pipeline selects at most `analysis.points` positions per summary (default 100). Rounded evenly spaced
 row positions include both endpoints and preserve original x coordinates.
 Short curves remain intact; `null` disables the limit, and integers must be at
 least 2. CSV, summary NPZ, and figure consumers share these reduced summaries.

@@ -103,6 +103,8 @@ spaced points by default, including both endpoints. CSV tables, summary `.npz`
 files, and figures share those points and their original coordinates. Short
 curves keep all points. Use an integer of at least 2, or `null` for full analysis
 resolution; this setting does not change recording or simulation results.
+Per-run metric caches retain every point in losslessly compressed `.npz` files.
+Older uncompressed caches remain reusable, including after raw data is pruned.
 
 From the repository root, optionally check the run count, then run the study:
 

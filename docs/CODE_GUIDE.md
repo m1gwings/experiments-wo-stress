@@ -383,7 +383,9 @@ or figures are exported. Full-resolution metric caches and aggregation checks
 remain intact; CSV and figures retain the selected original coordinates.
 
 [`analysis/cache.py`](../src/experiments_wo_stress/analysis/cache.py) contains
-`AnalysisCache`, which validates and publishes derived generations.
+`AnalysisCache`, which validates and publishes derived generations. It
+losslessly compresses newly published metric caches and reuses existing
+uncompressed generations without changing their identities.
 [`analysis/figures.py`](../src/experiments_wo_stress/analysis/figures.py) turns
 summaries into Matplotlib or TikZ output, or calls a custom plotter. Its public
 `plot` entry point requests figure targets from the same dependency graph;
