@@ -206,7 +206,9 @@ supplies submitted work and authoritative outcomes. A bounded multiprocessing qu
 snapshots for CPU and GPU workers without changing either scheduler. One display
 thread refreshes Rich or plain stderr while scientific work proceeds. Inspect
 `WorkerProgress.eta` and `TerminalProgress.remaining` for attempt-aware and global
-estimates. This observer is independent of Discord and durable compute reporting.
+estimates. Pending derived work keeps the global ETA indeterminate; the display
+instead labels its simulation-only estimate and notes that analysis is pending.
+This observer is independent of Discord and durable compute reporting.
 
 ### 3. Execute one complete interaction step
 

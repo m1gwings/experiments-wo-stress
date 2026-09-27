@@ -225,6 +225,27 @@ class TerminalProgressTests(unittest.TestCase):
         self.display.configure_tasks({"METRIC": 1})
         self.assertIsNone(self.display.remaining(20))
 
+    def test_simulation_eta_is_labeled_while_analysis_is_pending(self):
+        display = self.display
+        display.configure(10)
+        display.configure_tasks({"METRIC": 10, "AGG": 2, "FIGURE": 1})
+        self.send(self.spec, 10)
+        self.assertIn("SIM remaining estimating", display._summary(0))
+        with patch("experiments_wo_stress.execution.progress.time.monotonic", return_value=10):
+            display.run_finished((self.spec.run_id, "completed", None))
+        self.assertIsNone(display.remaining(20))
+        self.assertEqual(display._simulation_remaining(20), 45)
+        self.assertIn("SIM remaining ~45s | analysis pending", display._summary(20))
+        display.console.print(display.render(20))
+        rendered = self.stream.getvalue()
+        self.assertIn("SIM finish ~", rendered)
+        self.assertIn("analysis pending", rendered)
+        self.assertNotIn("Finish estimating", rendered)
+        display.reuse_tasks({"METRIC": 10, "AGG": 2, "FIGURE": 1})
+        self.assertEqual(display.remaining(20), 45)
+        self.assertIn("remaining ~45s", display._summary(20))
+        self.assertNotIn("SIM remaining", display._summary(20))
+
     def test_bulk_reuse_closes_pipeline_without_creating_worker_rows(self):
         self.display.configure(1)
         self.display.run_finished((self.spec.run_id, "skipped", None))

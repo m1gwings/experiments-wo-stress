@@ -215,7 +215,10 @@ Elapsed 18:42 | Remaining ~31m | Finish ~16:46
 ```
 
 Rows follow workers as they take new runs. Estimates appear after enough work
-has been observed; unknown totals stay indeterminate. Redirected stderr gets
+has been observed; unknown totals stay indeterminate. While analysis tasks are
+pending, the dashboard shows `SIM remaining` and `SIM finish` for the simulation
+backlog, explicitly marking analysis as pending. That time is not the final study
+ETA. Redirected stderr gets
 plain updates every 30 seconds, plus immediate failures and a final summary.
 `--quiet` keeps only final summaries and errors. JSON stays on stdout, `NO_COLOR`
 is respected, and Ctrl-C keeps the existing safe checkpoint-and-stop behavior.

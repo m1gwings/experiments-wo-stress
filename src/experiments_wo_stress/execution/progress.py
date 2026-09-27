@@ -367,12 +367,13 @@ class TerminalProgress:
         """Count unsubmitted runs, excluding every terminal outcome and active task."""
         return max(0, self.total - sum(self.counts.values()) - len(self.active))
 
-    def remaining(self, now: float) -> float | None:
-        """Estimate backlog from observed run durations and available concurrency."""
-        if self.tasks or any(
+    def _derived_pending(self) -> bool:
+        return bool(self.tasks) or any(
             self.task_totals[kind] > sum(self.task_counts[kind].values()) for kind in _DERIVED_KINDS
-        ):
-            return None  # Simulation throughput does not estimate heterogeneous derivations.
+        )
+
+    def _simulation_remaining(self, now: float) -> float | None:
+        """Estimate the simulation backlog without treating analysis as simulation work."""
         if not self.active and not self.queued:
             return 0.0 if self.total else None
         if not self.durations or now - self.started < 5:
@@ -388,6 +389,28 @@ class TerminalProgress:
         concurrency = min(self.workers, self.queued + len(self.active))
         return median(self.durations) * work / max(1, concurrency)
 
+    def remaining(self, now: float) -> float | None:
+        """Estimate full-study time only when no unmeasured derived work remains."""
+        if self._derived_pending():
+            return None
+        return self._simulation_remaining(now)
+
+    def _estimate_text(self, now: float, *, finish: bool) -> str:
+        if self._derived_pending() and (self.active or self.queued):
+            remaining = self._simulation_remaining(now)
+            label = "SIM remaining"
+            suffix = " | analysis pending"
+            finish_label = "SIM finish"
+        else:
+            remaining = self.remaining(now)
+            label = "Remaining" if finish else "remaining"
+            suffix = ""
+            finish_label = "Finish"
+        estimate = f"{label} {_estimate(remaining)}"
+        if finish:
+            estimate += f" | {finish_label} {self._finish_estimate(remaining)}"
+        return estimate + suffix
+
     def _summary(self, now: float) -> str:
         if not self.total:
             return f"preparing study | elapsed {_duration(now - self.started)}"
@@ -395,7 +418,7 @@ class TerminalProgress:
         summary = (
             f"{done}/{self.total} completed | {len(self.active) + len(self.tasks)} running | "
             f"{self.queued} queued | {self.counts['failed']} failed | "
-            f"elapsed {_duration(now - self.started)} | remaining {_estimate(self.remaining(now))}"
+            f"elapsed {_duration(now - self.started)} | {self._estimate_text(now, finish=False)}"
         )
         return summary + self._task_summary()
 
@@ -471,8 +494,6 @@ class TerminalProgress:
             if not narrow:
                 cells.insert(-1, "—" if row.eta(now) is None else _estimate(row.eta(now)))
             table.add_row(*cells)
-        remaining = self.remaining(now)
-        finish = self._finish_estimate(remaining)
         return Group(
             heading,
             table,
@@ -482,8 +503,8 @@ class TerminalProgress:
                 f"{self.counts['failed']} failed" + self._task_summary()
             ),
             Text(
-                f"Elapsed {_duration(now - self.started)} | Remaining {_estimate(remaining)} | "
-                f"Finish {finish}",
+                f"Elapsed {_duration(now - self.started)} | "
+                f"{self._estimate_text(now, finish=True)}",
                 style="dim",
             ),
         )

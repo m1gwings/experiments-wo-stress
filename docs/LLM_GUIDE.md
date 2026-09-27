@@ -633,9 +633,11 @@ a positive integer `total_steps` in protocol-step units; otherwise progress is
 indeterminate. Per-run ETA measures only new work since restoration, waiting for
 two seconds and 1% progress. Global ETA waits for five seconds and a completed
 execution, then combines recent median run durations, queued work, active fractions,
-and concurrency; reuse/failures do not train it. Overall ETA remains indeterminate
-while derived work has no defensible duration estimate. Estimates are approximate
-for heterogeneous workloads. The Python `run_experiment` API remains silent unless
+and concurrency; reuse/failures do not train it. While derived work is pending,
+`SIM remaining` and `SIM finish` show only the observed simulation backlog and
+explicitly say analysis is pending. This estimate is not the study's final ETA;
+the overall ETA remains indeterminate until derived work completes. Estimates
+are approximate for heterogeneous workloads. The Python `run_experiment` API remains silent unless
 given `progress=` with an entered `TerminalProgress(name, workers,
 timezone="Europe/Rome")` context from
 `experiments_wo_stress.execution.progress`. Monitoring changes no scientific state

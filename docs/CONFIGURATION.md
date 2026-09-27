@@ -267,9 +267,13 @@ two seconds and 1% of new work. Global ETA uses the median of up to 32 observed
 completed-run durations, unfinished active fractions, queued work, and available
 worker concurrency. It waits at least five seconds and one completed execution;
 reused and failed runs do not train the estimate. Estimates are approximate,
-especially for heterogeneous runs or resumed prefixes. Overall ETA remains
-indeterminate while derived work has no defensible duration estimate. Dashboard completed
-counts include reused results; the final summary lists reuse separately.
+especially for heterogeneous runs or resumed prefixes. While metrics,
+aggregations, or figures remain pending, the dashboard labels the observed
+simulation-only estimate `SIM remaining` and `SIM finish`, followed by
+`analysis pending`. This is not a prediction of the study's final completion time. It
+appears after a completed simulation even when analysis has a large backlog;
+the overall ETA remains indeterminate until derived work is complete. Dashboard
+completed counts include reused results; the final summary lists reuse separately.
 
 The Python `run_experiment` API remains silent by default. Its optional
 `progress=` argument accepts an entered `TerminalProgress(name, workers,
