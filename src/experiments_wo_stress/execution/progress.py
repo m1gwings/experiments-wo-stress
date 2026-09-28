@@ -396,20 +396,23 @@ class TerminalProgress:
         return self._simulation_remaining(now)
 
     def _estimate_text(self, now: float, *, finish: bool) -> str:
+        analysis = (
+            (" | analysis RUNNING" if self.tasks else " | analysis PENDING")
+            if self._derived_pending()
+            else ""
+        )
         if self._derived_pending() and (self.active or self.queued):
             remaining = self._simulation_remaining(now)
             label = "SIM remaining"
-            suffix = " | analysis pending"
             finish_label = "SIM finish"
         else:
             remaining = self.remaining(now)
             label = "Remaining" if finish else "remaining"
-            suffix = ""
             finish_label = "Finish"
         estimate = f"{label} {_estimate(remaining)}"
         if finish:
             estimate += f" | {finish_label} {self._finish_estimate(remaining)}"
-        return estimate + suffix
+        return estimate + analysis
 
     def _summary(self, now: float) -> str:
         if not self.total:
@@ -498,7 +501,7 @@ class TerminalProgress:
             heading,
             table,
             Text(
-                f"Runs  {self.counts['completed'] + self.counts['skipped']}/{self.total} completed | "
+                f"RUNS  {self.counts['completed'] + self.counts['skipped']}/{self.total} completed | "
                 f"{len(self.active) + len(self.tasks)} running | {self.queued} queued | "
                 f"{self.counts['failed']} failed" + self._task_summary()
             ),

@@ -151,7 +151,7 @@ class ExecutionCoordinator:
 
     def _publish_request(self, provenance: dict[str, Any]) -> None:
         self.store.validate_execution_root()
-        prepared = prepare_request(self.config, self.plan, provenance)
+        prepared = prepare_request(self.config, self.plan, provenance, self.store.root)
         self._publish_prepared_request(prepared)
 
     def _publish_prepared_request(self, prepared: PreparedRequest, graph: Any = None) -> None:

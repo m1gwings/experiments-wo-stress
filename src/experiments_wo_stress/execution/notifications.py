@@ -12,6 +12,7 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from collections import deque
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -105,6 +106,7 @@ class ExperimentNotifier:
         self._cancelled = threading.Event()
         self._thread: threading.Thread | None = None
         self._active: dict[str, tuple[Path, int | None]] = {}
+        self._recent_finished: deque[tuple[str, Path, int | None]] = deque(maxlen=64)
         self._counts = dict.fromkeys(("completed", "skipped", "paused", "failed"), 0)
         self._final: dict[str, Any] | None = None
         self._next_allowed = 0.0
@@ -139,7 +141,9 @@ class ExperimentNotifier:
         if self.enabled:
             run_id, status, _ = result
             with self._lock:
-                self._active.pop(run_id, None)
+                active = self._active.pop(run_id, None)
+                if active is not None:
+                    self._recent_finished.append((run_id, *active))
                 self._counts[status] += 1
 
     def finish(self, report: Mapping[str, Any], *, aborted: bool = False) -> None:
@@ -171,7 +175,8 @@ class ExperimentNotifier:
         with self._lock:
             counts = dict(self._counts)
             active_count = len(self._active)
-            active = list(self._active.items())[:_MAX_ACTIVE_DETAILS]
+            all_active = list(self._active.items())
+            recent_finished = list(self._recent_finished)
             final = dict(self._final) if self._final is not None else None
         if final is not None:
             counts = {key: final[key] for key in counts}
@@ -199,18 +204,37 @@ class ExperimentNotifier:
             f"Runs: {self.total}; completed {counts['completed']}; reused {counts['skipped']}; "
             f"paused {counts['paused']}; failed {counts['failed']}; pending {pending}",
         ]
+        observed = [
+            (run_id, budget, self._durable_step(directory))
+            for run_id, (directory, budget) in all_active
+        ]
+        available = next((item for item in observed if item[2] is not None), None)
+        # A run may finish between messages. Recent paths retain the last
+        # committed boundary without doing disk IO in coordinator callbacks.
+        if available is None:
+            for run_id, directory, budget in reversed(recent_finished):
+                step = self._durable_step(directory)
+                if step is not None:
+                    available = (run_id, budget, step)
+                    break
+        if available is not None:
+            run_id, budget, step = available
+            lines.append(
+                f"Durable checkpoint available {run_id[:12]}: step {step}"
+                + (f"/{budget}" if budget is not None else "")
+            )
         if final is None:
             lines.append(f"Active runs: {active_count}")
-            for run_id, (directory, budget) in active:
-                step = self._durable_step(directory)
+            active_details = sorted(observed, key=lambda item: item[2] is None)
+            for run_id, budget, step in active_details[:_MAX_ACTIVE_DETAILS]:
                 description = (
                     "no checkpoint available"
                     if step is None
                     else f"step {step}" + (f"/{budget}" if budget is not None else "")
                 )
                 lines.append(f"Last durable checkpoint {run_id[:12]}: {description}")
-            if active_count > len(active):
-                lines.append(f"Showing {len(active)} of {active_count} active checkpoints.")
+            if active_count > _MAX_ACTIVE_DETAILS:
+                lines.append(f"Showing {_MAX_ACTIVE_DETAILS} of {active_count} active checkpoints.")
         return "\n".join(lines)[:1900]
 
     @staticmethod
@@ -220,7 +244,14 @@ class ExperimentNotifier:
                 raw = stream.read(_MAX_PROGRESS_BYTES + 1)
             if len(raw) > _MAX_PROGRESS_BYTES:
                 return None
-            value = json.loads(raw).get("step")
+            progress = json.loads(raw)
+            if (
+                not isinstance(progress, dict)
+                or not isinstance(progress.get("checkpoints"), list)
+                or not progress["checkpoints"]
+            ):
+                return None
+            value = progress.get("step")
             return (
                 value
                 if isinstance(value, int) and not isinstance(value, bool) and value >= 0

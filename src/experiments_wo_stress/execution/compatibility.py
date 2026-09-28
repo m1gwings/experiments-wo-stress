@@ -8,6 +8,8 @@ are not part of the simulation fingerprint inventory.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
+
 # Reviewed edits: observational decorators, progress transport, and this digest
 # bridge and semantic catalog publication; no scientific state, scheduling,
 # checkpoint persistence, RNG, or numerical result-format changes. The portable
@@ -56,3 +58,50 @@ def implementation_digest(name: str, digest: str) -> str:
     """Bridge exact reviewed operational edits; conservatively hash every other edit."""
     reviewed = _OBSERVATIONAL_REVISIONS.get(name)
     return reviewed[1] if reviewed and digest == reviewed[0] else digest
+
+
+# The 047fbc5 CPU writer used the same run/checkpoint code, but its fingerprint
+# included operational coordinator and provenance modules before the DAG and
+# recovery catalog were split out. These exact revisions have been reviewed and
+# exercised against a paused 047fbc5 CMAB run. A later edit disables the bridge.
+_LEGACY_047F_BRIDGE: dict[str, tuple[str, str | None]] = {
+    "execution/coordinator.py": (
+        "0ae37851113dcf1b8b3de08ff0a86c749696b9c9d5bf52d67caeb910413c62dc",
+        "415420bf9df2ddef783c3d07efb5ace788b13b25479607d6ae73b16fa3a89423",
+    ),
+    "execution/provenance.py": (
+        "92808b9271c79e9e91e118f14c76206e9e8f71c8cfd05df66f99fb49c3d85081",
+        "e31edfdb26117bdd868814bb1350056cef6666861cab2a95d4c4df823376d1a2",
+    ),
+    "execution/resources.py": (
+        "9a5d9207473eb0a9e2974b80c78300d184e8d67284c2cb0c9b174a3b8ec5aeb3",
+        "c59620c438e444bf6bc21c60af190ace4433eee1d7a24f9d0a0c3335ca8e4d95",
+    ),
+    "storage/experiment.py": (
+        "04070880aacd2f0355ad1d2dd9df99114599490ed512e14d05d7cb0a8a0ab963",
+        "001a4f83ab819b7d32ba14fb3e12f0c47b0247d96bb18c6906aded295bdb7ac6",
+    ),
+    "execution/scheduler.py": (
+        "76f5fcb89e6dad0dae0d37469ca8c2587ec0fd9bda2382999064e25afd29d0d4",
+        None,
+    ),
+    "storage/trajectories.py": (
+        "1845acf3e62ac0b324323056f6612f759a799e525e4abb11cc09241492614dea",
+        None,
+    ),
+}
+
+
+def legacy_047f_implementation(implementation: Mapping[str, str]) -> dict[str, str] | None:
+    """Reconstruct the exact 047fbc5 signature only for reviewed source revisions."""
+    if any(
+        implementation.get(name) != current for name, (current, _) in _LEGACY_047F_BRIDGE.items()
+    ):
+        return None
+    legacy = dict(implementation)
+    for name, (_, old) in _LEGACY_047F_BRIDGE.items():
+        if old is None:
+            legacy.pop(name)
+        else:
+            legacy[name] = old
+    return legacy

@@ -336,7 +336,8 @@ class NotificationProgressTests(_MockTransportTestCase):
         """Only a valid nonnegative integer step is eligible for a progress summary."""
         directory = Path("unused")
         values = [
-            b'{"step": 12}',
+            b'{"step": 12, "checkpoints": [{"generation": "saved"}]}',
+            b'{"step": 12, "checkpoints": []}',
             b'{"step": -1}',
             b'{"step": true}',
             b'{"step": 1.5}',
@@ -360,19 +361,40 @@ class NotificationProgressTests(_MockTransportTestCase):
         with mock.patch.object(Path, "open", side_effect=FileNotFoundError):
             self.assertIsNone(ExperimentNotifier._durable_step(directory))
 
-    def test_only_four_active_checkpoints_are_read_and_all_runs_are_counted(self):
+    def test_all_active_checkpoints_are_checked_but_only_four_details_are_shown(self):
         notifier = self.make_notifier()
         notifier.total = 10
         for index in range(8):
             notifier.run_started(f"run-{index}", Path(f"private-{index}"), 100)
         with mock.patch.object(notifier, "_durable_step", return_value=25) as read:
             message = notifier._message("progress")
-        self.assertEqual(read.call_count, 4)
+        self.assertEqual(read.call_count, 8)
         self.assertIn("Active runs: 8", message)
         self.assertIn("Showing 4 of 8", message)
         self.assertIn("pending 2", message)
         self.assertIn("step 25/100", message)
+        self.assertIn("Durable checkpoint available", message)
         self.assertNotIn("private-", message)
+
+    def test_checkpoint_outside_first_four_and_recently_finished_remains_visible(self):
+        notifier = self.make_notifier()
+        notifier.total = 5
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for index in range(5):
+                directory = root / str(index)
+                directory.mkdir()
+                if index == 4:
+                    (directory / "progress.json").write_text(
+                        '{"step": 31, "checkpoints": [{"generation": "saved"}]}',
+                        encoding="utf-8",
+                    )
+                notifier.run_started(f"run-{index}", directory, 100)
+            message = notifier._message("progress")
+            self.assertIn("Durable checkpoint available run-4: step 31/100", message)
+            notifier.run_finished(("run-4", "completed", None))
+            message = notifier._message("progress")
+            self.assertIn("Durable checkpoint available run-4: step 31/100", message)
 
     def test_final_status_distinguishes_paused_completed_and_aborted(self):
         notifier = self.make_notifier()
@@ -416,7 +438,9 @@ class NotificationDeliveryLifecycleTests(_MockTransportTestCase):
         self.opener.effect = capture
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory)
-            (path / "progress.json").write_text('{"step": 7}', encoding="utf-8")
+            (path / "progress.json").write_text(
+                '{"step": 7, "checkpoints": [{"generation": "saved"}]}', encoding="utf-8"
+            )
             notifier.run_started("first", path, 20)
             notifier.start()
             try:

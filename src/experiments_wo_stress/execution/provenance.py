@@ -16,11 +16,17 @@ import yaml
 from ..builtins.protocols import OfflineProtocol, OnlineProtocol
 from ..components.loading import resolve_type
 from ..storage.checkpoints import describe_checkpoint_backend
-from ..storage.files import EXPERIMENT_SCHEMA_VERSION, SCHEMA_VERSION, digest_file, fingerprint
+from ..storage.files import (
+    EXPERIMENT_SCHEMA_VERSION,
+    SCHEMA_VERSION,
+    digest_file,
+    fingerprint,
+    read_json,
+)
 from ..study.config import ExperimentConfig
 from ..study.planning import plan_runs
 from ..study.specs import ComponentSpec, RunSpec
-from .compatibility import implementation_digest
+from .compatibility import implementation_digest, legacy_047f_implementation
 from .portability import portable_environment
 
 
@@ -255,7 +261,10 @@ class PreparedRequest:
 
 
 def prepare_request(
-    config: ExperimentConfig, specs: list[RunSpec], provenance: dict[str, Any]
+    config: ExperimentConfig,
+    specs: list[RunSpec],
+    provenance: dict[str, Any],
+    retained_root: Path | None = None,
 ) -> PreparedRequest:
     """Select variants from scientific inputs, implementation, recording, and budget.
 
@@ -271,6 +280,11 @@ def prepare_request(
     source_cache = {}
     hashed: dict[Path, str] = {}
     extension_support: dict[str, bool] = {}
+    legacy_implementation = (
+        legacy_047f_implementation(provenance["implementation"])
+        if retained_root is not None and not config.execution.get("gpu_ids")
+        else None
+    )
     for spec in specs:
         sources = {}
         extendable = spec.budget_steps is not None
@@ -302,6 +316,19 @@ def prepare_request(
             "budget": None if extendable else spec.budget_steps,
         }
         storage_id = fingerprint(identity)[:32]
+        if legacy_implementation is not None:
+            legacy_code = fingerprint(
+                {
+                    "implementation": legacy_implementation,
+                    "components": sources,
+                    "environment": provenance["environment"],
+                }
+            )
+            legacy_identity = {**identity, "code": legacy_code}
+            legacy_id = fingerprint(legacy_identity)[:32]
+            legacy_path = retained_root / "runs" / legacy_id / "metadata.json"
+            if legacy_path.is_file() and read_json(legacy_path).get("identity") == legacy_identity:
+                identity, code_signature, storage_id = legacy_identity, legacy_code, legacy_id
         locations[spec.run_id] = storage_id
         requests[storage_id] = spec.to_dict()
         variants[storage_id] = {

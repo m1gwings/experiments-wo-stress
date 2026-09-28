@@ -627,6 +627,9 @@ progress where meaningful, elapsed time, status, and approximate ETA. The summar
 keeps simulation and derived-task counts separate. Redirected
 stderr receives plain updates every 30 seconds; failures are immediate and final
 summaries are always emitted. `--quiet` keeps only final summaries and errors.
+The stage label is `RUNS` alongside the uppercase worker kinds. While simulations
+remain, the estimate marks analysis `RUNNING` when a derived task is active and
+`PENDING` when its dependencies have yet to release work.
 JSON stays on stdout and `NO_COLOR` disables colors. Ctrl-C retains safe
 step-boundary cancellation and restores the terminal. Study components should
 use their injected logger, not print competing progress bars. Tracebacks stay in

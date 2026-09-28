@@ -311,6 +311,30 @@ class DependencyAnalysisTests(unittest.TestCase):
         self.assertEqual(graph.ready_tasks(), [])
         self.assertFalse(graph.complete)
 
+    def test_figure_waits_only_for_its_declared_metric_aggregates(self):
+        analysis = deepcopy(self.config.analysis)
+        analysis["metrics"].append(
+            {"name": "action", "type": "field", "params": {"field": "action"}}
+        )
+        analysis["figures"].append(
+            {"name": "action-curve", "metric": "action", "formats": ["tikz"]}
+        )
+        config = replace(self.config, analysis=analysis)
+        for spec in self.specs:
+            self.save_run(spec)
+        graph = self.graph(config)
+        for task in graph.ready_tasks():
+            if task.subject.startswith("reward /"):
+                execute_derivation(task)
+                graph.finish(task)
+        ready = graph.ready_tasks()
+        reward_aggregate = next(task for task in ready if task.kind == "aggregate")
+        execute_derivation(reward_aggregate)
+        graph.finish(reward_aggregate)
+        ready = graph.ready_tasks()
+        self.assertEqual([task.kind for task in ready], ["metric", "metric", "figure"])
+        self.assertEqual(ready[-1].subject, "curve")
+
     def test_canonical_reduction_does_not_depend_on_completion_order(self):
         graph = self.materialize()
         expected = graph.finalize()[0][0]

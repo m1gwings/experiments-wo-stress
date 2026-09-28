@@ -851,7 +851,10 @@ secret. Analysis and plotting do not send messages.
 The update interval must be at least one second; the socket timeout must be
 positive and no longer than 30 seconds. Defaults are shown above.
 
-Messages report run counts and recent durable checkpoint progress. Delivery is best
+Messages report run counts and committed checkpoint progress from active or recently
+finished runs. A run has no durable checkpoint until `progress.json` references a
+committed generation; an initial step of zero does not count. The message samples
+all active runs but shows at most four per-run details. Delivery is best
 effort: network errors do not fail simulations, and even the final summary may be
 missed during an outage or forced stop. Notification settings do not change run
 identities or random streams. Messages omit numerical data, parameters, paths, and

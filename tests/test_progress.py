@@ -235,11 +235,16 @@ class TerminalProgressTests(unittest.TestCase):
             display.run_finished((self.spec.run_id, "completed", None))
         self.assertIsNone(display.remaining(20))
         self.assertEqual(display._simulation_remaining(20), 45)
-        self.assertIn("SIM remaining ~45s | analysis pending", display._summary(20))
+        self.assertIn("SIM remaining ~45s | analysis PENDING", display._summary(20))
         display.console.print(display.render(20))
         rendered = self.stream.getvalue()
         self.assertIn("SIM finish ~", rendered)
-        self.assertIn("analysis pending", rendered)
+        self.assertIn("analysis PENDING", rendered)
+        self.assertIn("RUNS", rendered)
+        display.task_started("metric:one", "METRIC", "reward")
+        self.assertIn("analysis RUNNING", display._summary(20))
+        display.task_finished("metric:one")
+        self.assertIn("analysis PENDING", display._summary(20))
         self.assertNotIn("Finish estimating", rendered)
         display.reuse_tasks({"METRIC": 10, "AGG": 2, "FIGURE": 1})
         self.assertEqual(display.remaining(20), 45)
@@ -254,6 +259,13 @@ class TerminalProgressTests(unittest.TestCase):
         self.assertEqual(self.display.rows, {})
         self.assertEqual(self.display.remaining(20), 0)
         self.assertIn("METRIC 5/5 | AGG 1/1 | FIGURE 1/1", self.display._summary(20))
+
+    def test_analysis_running_after_simulations_finish(self):
+        self.display.configure(1)
+        self.display.configure_tasks({"METRIC": 1})
+        self.display.run_finished((self.spec.run_id, "completed", None))
+        self.display.task_started("metric:one", "METRIC", "reward")
+        self.assertIn("analysis RUNNING", self.display._summary(20))
 
     def test_interrupted_derived_work_is_not_reported_as_completed_simulations(self):
         with TerminalProgress("study", 1, quiet=True, console=self.console) as display:
