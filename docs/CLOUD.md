@@ -235,9 +235,13 @@ creation fail instead of certifying damaged results. Temporary files and pending
 analysis generations are never committed snapshot objects.
 
 Intentional-pruning receipts, required retained derivations, provenance, instances,
-and compute records travel together. Deleted result chunks remain absent. Retained
-checkpoint payloads for a pruned run are historical data, not permission to extend
-a run without its required prefix. A changed metric or larger budget may need a
+and compute records travel together. Deleted result chunks remain absent. A valid
+current pruning receipt excludes all checkpoint payloads from recovery selection,
+even when an older output still has stale checkpoint files or progress references.
+Snapshot creation leaves that source output unchanged and avoids traversing the
+irrelevant payloads. The recovery v1 path-to-hash-and-size contract is unchanged.
+`ews clean OUTPUT --scope settled` previews explicit reclamation of such old state.
+A changed metric or larger budget may need a
 fresh simulation. References for previously analyzed budgets survive that replay,
 including interruption, so their retained derivations remain reusable after restore.
 After restore, EWS still performs its ordinary scientific,

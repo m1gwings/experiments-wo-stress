@@ -19,6 +19,7 @@ from experiments_wo_stress.cli import main
 from experiments_wo_stress.execution import compute, provenance
 from experiments_wo_stress.execution.compatibility import (
     _OBSERVATIONAL_REVISIONS,
+    _SETTLED_TRAJECTORY_REVISION,
     implementation_digest,
 )
 from experiments_wo_stress.storage import iter_completed_runs
@@ -278,7 +279,9 @@ class ComputeLifecycleTests(unittest.TestCase):
         for name, (reviewed, previous) in _OBSERVATIONAL_REVISIONS.items():
             with self.subTest(module=name):
                 current = provenance.digest_file(package / name)
-                if current != reviewed:
+                if current != reviewed and not (
+                    name == "storage/trajectories.py" and current == _SETTLED_TRAJECTORY_REVISION
+                ):
                     self.assertEqual(implementation_digest(name, current), current)
                 self.assertEqual(implementation_digest(name, reviewed), previous)
                 self.assertEqual(

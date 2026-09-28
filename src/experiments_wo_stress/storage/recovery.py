@@ -58,6 +58,7 @@ def _files(
     directory: Path,
     *,
     skip_temporary: bool = False,
+    skip_run_payloads: bool = False,
     directories: set[str] | None = None,
 ) -> dict[str, Path]:
     """Inventory regular files without following links or accepting special files."""
@@ -69,7 +70,16 @@ def _files(
         for path in sorted(parent.iterdir()):
             if skip_temporary and path.name.startswith("."):
                 continue
-            name = _relative_path(path.relative_to(directory).as_posix())
+            relative = path.relative_to(directory)
+            name = _relative_path(relative.as_posix())
+            if (
+                skip_run_payloads
+                and len(relative.parts) == 3
+                and relative.parts[0] == "runs"
+                and path.name in {"checkpoints", "results"}
+            ):
+                # These are selected at their committed boundary in _run().
+                continue
             mode = path.lstat().st_mode
             if stat.S_ISDIR(mode):
                 if directories is not None:
@@ -125,7 +135,9 @@ class _CommittedOutput:
     def __init__(self, root: Path) -> None:
         self.root = root
         self.directories: set[str] = set()
-        self.files = _files(root, skip_temporary=True, directories=self.directories)
+        self.files = _files(
+            root, skip_temporary=True, skip_run_payloads=True, directories=self.directories
+        )
         self.omitted: list[dict[str, str]] = []
         self.pruned_runs: list[str] = []
         self.validated_instances: set[str] = set()
@@ -180,8 +192,6 @@ class _CommittedOutput:
             self.validated_instances.add(instance_id)
 
     def _run(self, directory: Path) -> None:
-        self._exclude(directory / "results")
-        self._exclude(directory / "checkpoints")
         progress_path = directory / "progress.json"
         if not progress_path.exists():
             return
@@ -200,6 +210,9 @@ class _CommittedOutput:
         pruned = pruning_receipt(directory) is not None
         if pruned:
             self.pruned_runs.append(directory.name)
+            # Even old progress may name checkpoints whose raw prefix is gone.
+            # The receipt proves none can be resumed; avoid reading their payloads.
+            return
         completed = list(progress.get("completed_budgets", {}).values())
         if progress.get("status") == "completed":
             completed.append({"results": progress["results"]})
@@ -215,8 +228,7 @@ class _CommittedOutput:
             visited.add(identifier)
             try:
                 checkpoint, snapshot = _checkpoint(directory, entry)
-                if not pruned:
-                    validate_results(directory, snapshot["results"])
+                validate_results(directory, snapshot["results"])
             except _UnsupportedCheckpoint:
                 # Unknown representations remain evidence of saved work. Removing
                 # them could incorrectly turn a decoder error into a fresh run.
@@ -232,12 +244,17 @@ class _CommittedOutput:
                 continue
             self._include(checkpoint)
             manifests.append(snapshot["results"])
-        if pruned:
-            return
         for manifest in manifests:
+            results = directory / "results"
+            if manifest["chunks"] and results.is_symlink():
+                raise StorageError(f"Result directory is a symbolic link: {results}")
+            for chunk in manifest["chunks"]:
+                path = results / chunk["file"]
+                if path.is_symlink():
+                    raise StorageError(f"Result chunk is a symbolic link: {path}")
             validate_results(directory, manifest)
             for chunk in manifest["chunks"]:
-                path = directory / "results" / chunk["file"]
+                path = results / chunk["file"]
                 self.files[path.relative_to(self.root).as_posix()] = path
 
     def _cache(self, directory: Path) -> None:

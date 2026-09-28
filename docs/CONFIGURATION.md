@@ -319,8 +319,11 @@ reject sparse trajectories; the library does not infer omitted data.
 raw trajectories. `until_analyzed` still records every configured observation,
 then removes a completed run's result chunks once all currently configured
 per-run metrics are durably materialized and validated. It need not wait for
-aggregation or figures. Instances, provenance, checkpoint files, logs, and compute
-history remain. With no metrics configured, trajectories remain retained.
+aggregation or figures. The pruning receipt is published before result chunks
+are removed; checkpoint references are then cleared before their payloads are
+deleted. Instances, provenance, logs, and compute history remain. Active,
+paused, and completed unpruned runs retain checkpoint fallback generations.
+With no metrics configured, trajectories remain retained.
 
 `recording.metric_retention` independently accepts `keep` (default) or
 `until_aggregated`. The latter deletes the per-run metric cache generations
@@ -809,6 +812,7 @@ The public commands are `count-runs`, `run`, `analyze`, `plot`, `inspect`, and
 | `ews plot examples/sequential_study/experiment.yml --output outputs/bandits` | Update figures using saved results. |
 | `ews inspect outputs/bandits` | Read stored status and validate completed artifacts. |
 | `ews clean outputs/bandits --scope inactive` | Preview removal of inactive retained artifacts. |
+| `ews clean outputs/bandits --scope settled` | Preview obsolete checkpoints of proven pruned runs; add `--yes` to reclaim them. |
 
 Cleanup requires `--yes` to delete the previewed selection.
 
@@ -816,6 +820,7 @@ Cleanup requires `--yes` to delete the previewed selection.
 | --- | --- |
 | `analysis` | Rebuildable analysis outputs and caches. |
 | `checkpoints` | Saved execution state; numerical observations remain, continuation is lost. |
+| `settled` | Checkpoints of runs with valid current trajectory-pruning receipts; old outputs are cleaned explicitly. |
 | `inactive` | Variants outside the active request; this is the default scope. |
 | `runs` | Run artifacts, optionally restricted by repeated `--run-id ID`. |
 | `all` | Experiment contents, retaining the output directory itself. |

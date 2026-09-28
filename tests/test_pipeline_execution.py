@@ -55,7 +55,13 @@ class _PipelineCase(_ExecutionStudyTestCase):
         for directory in self.variants(output):
             self.assertTrue((directory / "trajectory.json").is_file())
             self.assertFalse(list((directory / "results").glob("*.npz")))
-            self.assertTrue(list((directory / "checkpoints").iterdir()))
+            checkpoints = directory / "checkpoints"
+            self.assertFalse(checkpoints.exists() and list(checkpoints.iterdir()))
+            progress = read_json(directory / "progress.json")
+            self.assertEqual(progress["checkpoints"], [])
+            self.assertTrue(
+                all(not item.get("checkpoint") for item in progress["completed_budgets"].values())
+            )
             metadata = read_json(directory / "metadata.json")
             self.assertTrue((output / "instances" / metadata["instance_id"]).is_dir())
 
@@ -136,6 +142,7 @@ class RetentionBoundaryTests(_PipelineCase):
         for directory in self.variants(output):
             self.assertFalse((directory / "trajectory.json").exists())
             self.assertTrue(list((directory / "results").glob("*.npz")))
+            self.assertTrue(list((directory / "checkpoints").iterdir()))
         settings["recording"]["retention"] = "until_analyzed"
         settings.pop("analysis")
         output = self.root / "no-metrics"

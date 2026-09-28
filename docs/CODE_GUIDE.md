@@ -164,7 +164,9 @@ and identity transformations separately from progress counters and task labels.
 
 [`storage/trajectories.py`](../src/experiments_wo_stress/storage/trajectories.py)
 separates completed input references, raw loading, intentional pruning, and fresh
-rematerialization. Read `prune_trajectory` for marker-before-delete ordering and
+rematerialization. Read `prune_trajectory` for receipt, raw deletion, reference
+clearance, and checkpoint payload deletion ordering; `settle_pruned_checkpoints`
+is the idempotent cleanup boundary. Read
 `rematerialize_trajectory` for conservative handling of missing prefixes while
 preserving earlier completed-budget references.
 [`storage/recovery.py`](../src/experiments_wo_stress/storage/recovery.py) owns the
@@ -351,6 +353,10 @@ rules continue to apply.
 file writes, checksums, and explicit state packing. Read it after the transaction
 sequence above. [`storage/cleanup.py`](../src/experiments_wo_stress/storage/cleanup.py)
 handles previewing and removing selected artifacts under the experiment lock.
+Its `settled` scope applies the same receipt-backed checkpoint cleanup to old
+outputs. Recovery skips checkpoint traversal for proven pruned runs. Run
+`PYTHONPATH=src python scripts/benchmark_settled.py --runs 2000` for a disposable
+large-inventory file-count measurement outside the normal test suite.
 
 The saved data types are in
 [`storage/models.py`](../src/experiments_wo_stress/storage/models.py).
@@ -433,6 +439,7 @@ the interaction visible; temporary directories isolate persisted artifacts.
 | [test_dependency_analysis.py](../tests/test_dependency_analysis.py) | Nearest retained ancestor reuse, separate invalidation, and per-group readiness. |
 | [test_display.py](../tests/test_display.py) | IANA timezone precedence, deterministic display, and observational configuration. |
 | [test_recovery.py](../tests/test_recovery.py) | Versioned snapshot inventories, safe restoration, fallback, pruning, and unsupported versions. |
+| [test_settled_storage.py](../tests/test_settled_storage.py) | Crash-safe checkpoint retirement, old-output cleanup, and pruned snapshot selection. |
 | [test_study.py](../tests/test_study.py) | Configuration validation, planner output, stable identities, and independent random streams. |
 | [test_components.py](../tests/test_components.py) | Component loading, aliases, constructor validation, and injected capabilities. |
 | [test_protocols.py](../tests/test_protocols.py) | Online feedback boundaries, offline fitting, and callable trials. |

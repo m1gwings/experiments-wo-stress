@@ -8,12 +8,15 @@ from pathlib import Path
 
 import yaml
 
-from experiments_wo_stress.execution.compatibility import legacy_implementations
+from experiments_wo_stress.execution.compatibility import (
+    implementation_digest,
+    legacy_implementations,
+)
 from experiments_wo_stress.execution.provenance import (
     collect_provenance,
     prepare_request,
 )
-from experiments_wo_stress.storage.files import atomic_json
+from experiments_wo_stress.storage.files import atomic_json, digest_file
 from experiments_wo_stress.study.config import load_config
 from experiments_wo_stress.study.planning import plan_runs
 
@@ -46,6 +49,19 @@ class LegacyVariantSelectionTests(unittest.TestCase):
             config = load_config(config_path)
             specs = plan_runs(config)
             provenance = collect_provenance(config, {})
+            trajectory = (
+                Path(__file__).resolve().parents[1]
+                / "src/experiments_wo_stress/storage/trajectories.py"
+            )
+            self.assertEqual(
+                provenance["implementation"]["storage/trajectories.py"],
+                "1845acf3e62ac0b324323056f6612f759a799e525e4abb11cc09241492614dea",
+            )
+            self.assertEqual(
+                implementation_digest("storage/trajectories.py", digest_file(trajectory)),
+                provenance["implementation"]["storage/trajectories.py"],
+            )
+            self.assertEqual(implementation_digest("storage/trajectories.py", "f" * 64), "f" * 64)
             self.assertEqual(
                 provenance["implementation"]["execution/coordinator.py"],
                 "0ae37851113dcf1b8b3de08ff0a86c749696b9c9d5bf52d67caeb910413c62dc",

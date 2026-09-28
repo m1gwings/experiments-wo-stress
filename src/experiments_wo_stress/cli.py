@@ -130,7 +130,7 @@ def main(argv: list[str] | None = None) -> int:
     cleanup.add_argument("output", type=Path)
     cleanup.add_argument(
         "--scope",
-        choices=("analysis", "checkpoints", "inactive", "runs", "all"),
+        choices=("analysis", "checkpoints", "inactive", "runs", "settled", "all"),
         default="inactive",
     )
     cleanup.add_argument(

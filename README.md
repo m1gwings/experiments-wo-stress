@@ -305,6 +305,13 @@ outside that invocation's timings.
 | `ews plot CONFIG --output DIR` | Regenerate configured figures from saved results. |
 | `ews inspect DIR` | Read stored status and validate completed artifacts without executing runs. |
 | `ews clean DIR --scope inactive` | Preview cleanup of retained artifacts. |
+| `ews clean DIR --scope settled` | Preview obsolete checkpoints from intentionally pruned runs; add `--yes` to remove them. |
+
+Active and paused runs retain checkpoint fallback generations. Once required
+metrics are durable, `until_analyzed` publishes a pruning receipt and removes
+the now unusable trajectory and checkpoints. Older outputs are read in place;
+`clean --scope settled` explicitly reclaims obsolete checkpoint files. Recovery
+snapshots omit checkpoints for proven pruned runs.
 
 ## Semantic artifact discovery
 

@@ -359,9 +359,15 @@ an offline fit or trial restarts its step if interrupted inside the call.
 completed raw result chunks after every currently configured per-run metric has
 been durably materialized and validated. Recording remains at the configured
 resolution; it is never silently sparsified. Aggregation and figures can consume
-retained metrics after deletion. Instances, provenance, checkpoint files, logs,
-and compute history remain. Without configured metrics, raw trajectories remain.
+retained metrics after deletion. The durable pruning receipt precedes raw deletion;
+progress then drops checkpoint references before their payloads are removed.
+Instances, provenance, logs, and compute history remain. Active, paused, and
+completed unpruned runs keep their checkpoint fallback generations. Without
+configured metrics, raw trajectories remain.
 The saved state distinguishes intentional pruning from corruption.
+Supported old artifacts are read in place. EWS does not migrate an output on
+ordinary execution; use `ews clean OUTPUT --scope settled` to preview obsolete
+checkpoints in an older pruned output, then add `--yes` to reclaim them.
 
 For a screening grid, `recording.metric_retention: until_aggregated` also removes
 per-run metric cache generations once each group's aggregate is durable. Summaries
@@ -699,6 +705,7 @@ operations as needed:
 | `ews plot experiment.yml --output outputs/study` | Regenerate figures from saved data. |
 | `ews inspect outputs/study` | Read saved status and validate completed artifacts. |
 | `ews clean outputs/study --scope inactive` | Preview cleanup of inactive variants. |
+| `ews clean outputs/study --scope settled` | Preview obsolete checkpoints from pruned runs; add `--yes` to remove them. |
 
 The six public commands are `count-runs`, `run`, `analyze`, `plot`, `inspect`, and
 `clean`. The optional `ews count-runs experiment.yml` validates configuration and
@@ -708,7 +715,9 @@ require an output directory, and never needs to precede `run`. From Python,
 APIs revise saved derivations without simulation.
 
 Cleanup is a preview until `--yes` is supplied. Scopes are `analysis`,
-`checkpoints`, `inactive`, `runs`, and `all`. Removing checkpoints loses the
+`checkpoints`, `inactive`, `runs`, `settled`, and `all`. `settled` reclaims
+checkpoints only where a valid current pruning receipt proves them unusable.
+Removing checkpoints loses the
 ability to continue those runs, although saved observations remain. Keep source,
 inputs, and generated output in separate locations.
 
@@ -810,8 +819,10 @@ restore_snapshot(snapshot, "outputs/restored-study")
 ```
 
 `create_snapshot` holds experiment ownership and copies only committed retained
-artifacts, including intentional-pruning evidence and valid referenced checkpoint
-generations. Temporary and uncommitted objects are excluded. The snapshot contains
+artifacts, including intentional-pruning evidence and valid referenced checkpoints
+of unpruned runs. Pruned runs contribute no checkpoint payloads, even when old
+progress still names them. Temporary and uncommitted objects are excluded. The
+snapshot contains
 `output/` payloads and `recovery.json`, whose schema is
 `experiments-wo-stress/recovery`, version `1`; it records relative payload paths,
 sizes, SHA-256 checksums, directory paths (including empty payload directories),

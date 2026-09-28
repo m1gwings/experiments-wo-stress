@@ -434,13 +434,28 @@ become durable earlier.
 
 `recording.retention: keep` preserves raw observations. With `until_analyzed`,
 all currently configured per-run metrics must first have valid durable artifacts.
-EWS then publishes a checksummed pruning receipt preserving completed input
-revisions before removing result chunks. An interrupted deletion is still an
-intentional state; unmarked missing or corrupt chunks remain damage. Instances,
-provenance, checkpoints, and compute history are retained. Exact budget references
+EWS then publishes and syncs a checksummed pruning receipt preserving completed
+input revisions before removing result chunks. It atomically clears all live
+checkpoint references from progress before deleting checkpoint generations. A
+crash may leave unreferenced directories, which repeated pruning or explicit
+`ews clean OUTPUT --scope settled --yes` removes. Pruned trajectories retain zero
+resumable checkpoints because their raw prefixes are gone. Active, paused, and
+completed unpruned runs keep their configured checkpoint fallback. Historical
+checkpoint counts and timing remain diagnostic. An interrupted deletion is still
+an intentional state; unmarked missing or corrupt chunks remain damage. Instances,
+provenance, and compute history are retained. Exact budget references
 survive rematerialization so earlier retained derivations can remain reusable
 while a later budget is being replayed. A prefix-only request
 never deletes the unanalysed tail of a longer completed run.
+
+Storage evolution must not add migration work to the normal execution hot path.
+Old durable artifacts are read in place when supported; disposable artifacts
+are recomputed from the nearest retained valid ancestor; provably obsolete
+artifacts are pruned. Format migration is explicit and reserved for genuinely
+incompatible future changes.
+Recovery v1 selects no checkpoint payloads for a run with a valid current
+pruning receipt, including old outputs with stale progress references. It skips
+their payload traversal and leaves the source output unchanged.
 
 With `recording.metric_retention: until_aggregated`, each validated aggregate
 authorizes deletion of exactly the per-run metric generations it consumed.

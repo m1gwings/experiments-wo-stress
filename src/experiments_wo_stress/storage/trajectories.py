@@ -2,13 +2,14 @@
 
 Receipts preserve the exact input revision of derived artifacts. Publication of
 a checksummed pruning marker precedes removal, so interruption cannot turn an
-intentional deletion into apparent corruption. Only numerical result chunks are
-removed; instances, provenance, checkpoints, logs and compute history survive.
+intentional deletion into apparent corruption. Settled trajectories discard their
+unusable checkpoints after removing durable references to them.
 """
 
 from __future__ import annotations
 
 import re
+import shutil
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,34 @@ def _valid_reference(key: Any, reference: Any) -> bool:
 def pruning_receipt(directory: Path) -> dict[str, Any] | None:
     """Read a valid marker for the currently pruned trajectory, rejecting damaged proof."""
     return _pruning_proof(directory, "trajectory.json", "pruned")
+
+
+def settle_pruned_checkpoints(directory: Path) -> None:
+    """Discard checkpoint references, then payloads, for a proven pruned run.
+
+    The receipt must already be durable. Replaying after either publication
+    boundary is safe: progress never names a generation removed by this method.
+    Historical checkpoint counters remain useful diagnostics.
+    """
+    if pruning_receipt(directory) is None:
+        raise StorageError(f"Trajectory is not proven pruned: {directory}")
+    progress_path = directory / "progress.json"
+    progress = read_json(progress_path)
+    completed = progress.get("completed_budgets", {})
+    if progress.get("checkpoints") or any(item.get("checkpoint") for item in completed.values()):
+        progress["checkpoints"] = []
+        for item in completed.values():
+            if "checkpoint" in item:
+                item["checkpoint"] = None
+        atomic_json(progress_path, progress)
+    checkpoints = directory / "checkpoints"
+    if checkpoints.exists():
+        for generation in checkpoints.iterdir():
+            if generation.is_symlink() or generation.is_file():
+                generation.unlink()
+            else:
+                shutil.rmtree(generation)
+        sync_directory(checkpoints)
 
 
 def pruning_history(directory: Path) -> dict[str, Any] | None:
@@ -199,7 +228,7 @@ def load_run_result(root: Path, storage_id: str, spec: RunSpec) -> RunResult:
 
 
 def prune_trajectory(root: Path, storage_id: str, spec: RunSpec, metrics: dict) -> None:
-    """Commit proofs of all required metrics, then remove only recorded result chunks.
+    """Commit metric and trajectory proofs, then discard obsolete raw state.
 
     Callers hold experiment ownership and supply validated metric cache identities.
     A running extension is never pruned. Repeating this operation completes a
@@ -239,14 +268,15 @@ def prune_trajectory(root: Path, storage_id: str, spec: RunSpec, metrics: dict) 
         for path in results.glob("*.npz"):
             path.unlink()
         sync_directory(results)
+    settle_pruned_checkpoints(directory)
 
 
 def rematerialize_trajectory(directory: Path) -> None:
     """Reset a deliberately pruned run to fresh execution without borrowing its endpoint.
 
     Archive exact completed-budget references before replacing current progress.
-    Checkpoint payloads remain historical files but are no longer resume candidates:
-    their trajectory prefixes are unavailable. Publish the reset before clearing
+    Checkpoint payloads are no longer resume candidates: their trajectory prefixes
+    are unavailable. Publish the reset before clearing
     the marker; a crash at either boundary remains safely restartable, and older
     derived artifacts retain their input identities throughout the replay.
     """

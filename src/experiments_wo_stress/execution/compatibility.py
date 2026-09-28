@@ -54,9 +54,16 @@ _OBSERVATIONAL_REVISIONS = {
     ),
 }
 
+# Exact retention-only revision: receipt publication, result bytes, checkpoint
+# encoding/decoding, RNG state, and scientific execution are unchanged. Bridge
+# the former effective digest so committed CPU variants stay selectable.
+_SETTLED_TRAJECTORY_REVISION = "0f4caf90a11a55f8f4b8437e59ff4833de413414359531f7cbf0d3ec6a0936ca"
+
 
 def implementation_digest(name: str, digest: str) -> str:
     """Bridge exact reviewed operational edits; conservatively hash every other edit."""
+    if name == "storage/trajectories.py" and digest == _SETTLED_TRAJECTORY_REVISION:
+        return _OBSERVATIONAL_REVISIONS[name][1]
     reviewed = _OBSERVATIONAL_REVISIONS.get(name)
     return reviewed[1] if reviewed and digest == reviewed[0] else digest
 

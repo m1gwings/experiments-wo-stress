@@ -9,6 +9,7 @@ from typing import Any
 
 from .experiment import ExperimentStore
 from .files import StorageError, atomic_json, read_json
+from .trajectories import pruning_receipt, settle_pruned_checkpoints
 
 
 def clean_experiment(
@@ -22,9 +23,10 @@ def clean_experiment(
 
     ``inactive`` removes variants outside the latest execution request. Clearing
     checkpoints preserves numerical results but forfeits resume/extension state.
+    ``settled`` removes only checkpoints of runs with valid pruning receipts.
     ``all`` empties this experiment directory without removing the directory itself.
     """
-    if scope not in {"analysis", "checkpoints", "inactive", "runs", "all"}:
+    if scope not in {"analysis", "checkpoints", "inactive", "runs", "settled", "all"}:
         raise ValueError("Unknown cleanup scope")
     if run_ids and scope not in {"runs", "checkpoints"}:
         raise ValueError("run_ids is supported only for runs or checkpoints cleanup")
@@ -47,6 +49,49 @@ def clean_experiment(
             selected = {key: variants[key] for key in run_ids}
         else:
             selected = variants
+        if scope == "settled":
+            settled = []
+            affected = []
+            generations = 0
+            files = 0
+            size = 0
+            for directory in sorted(selected.values()):
+                if pruning_receipt(directory) is None:
+                    continue
+                settled.append(directory)
+                progress = read_json(directory / "progress.json")
+                has_references = bool(progress.get("checkpoints")) or any(
+                    item.get("checkpoint")
+                    for item in progress.get("completed_budgets", {}).values()
+                )
+                checkpoints = directory / "checkpoints"
+                has_payloads = False
+                if checkpoints.exists():
+                    for generation in checkpoints.iterdir():
+                        has_payloads = True
+                        generations += 1
+                        for path in generation.rglob("*") if generation.is_dir() else [generation]:
+                            if path.is_file():
+                                files += 1
+                                size += path.stat().st_size
+                if has_references or has_payloads:
+                    affected.append(directory)
+            result = {
+                "scope": scope,
+                "dry_run": not yes,
+                "runs_examined": len(selected),
+                "settled_runs": len(settled),
+                "runs_with_obsolete_checkpoints": len(affected),
+                "checkpoint_generations": generations,
+                "checkpoint_files": files,
+                "bytes": size,
+                "paths": [str(path.relative_to(root) / "checkpoints") for path in affected[:10]],
+                "paths_omitted": max(0, len(affected) - 10),
+            }
+            if yes:
+                for directory in settled:
+                    settle_pruned_checkpoints(directory)
+            return result
         if scope == "all":
             paths = [path for path in root.iterdir() if path.name != ".lock"]
         elif scope == "analysis":

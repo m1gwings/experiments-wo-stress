@@ -266,7 +266,7 @@ class StudyRecoveryTests(_ExecutionStudyTestCase):
         self.assertEqual(run_experiment(config, restored).completed, 1)
         self.assert_results_equal(reference, restored)
 
-    def test_pruned_receipt_and_checkpoints_survive_without_recreating_chunks(self) -> None:
+    def test_pruned_receipt_omits_checkpoints_without_recreating_chunks(self) -> None:
         config = self.load_study_config(self.single_run_settings())
         output = self.root / "output"
         run_experiment(config, output)
@@ -282,7 +282,7 @@ class StudyRecoveryTests(_ExecutionStudyTestCase):
         manifest = validate_snapshot(snapshot)
         self.assertEqual(manifest["pruned_runs"], [storage_id])
         self.assertEqual(manifest["omitted_checkpoints"], [])
-        self.assertTrue(any("/checkpoints/" in name for name in manifest["files"]))
+        self.assertFalse(any("/checkpoints/" in name for name in manifest["files"]))
         self.assertFalse(any("/results/" in name for name in manifest["files"]))
         restored = restore_snapshot(snapshot, self.root / "restored")
         self.assertEqual(

@@ -73,11 +73,17 @@ contract, with real-paper validation still needed before declaring it stable.
   Publish each run variant lazily before use; a compact durable request covers
   the complete invocation. Prefer ready metrics and closing actual analysis groups,
   with bounded fairness for simulations. Scheduling never enters scientific IDs.
-- `recording.retention: until_analyzed` removes only trajectories after every
+- `recording.retention: until_analyzed` removes raw trajectories and their
+  unusable checkpoints only after every
   configured per-run metric has a validated durable artifact. Publish intentional
   pruning proof before deletion. Missing unmarked data remains corruption;
   missing required raw ancestors may be rematerialized only by `run`. Pruned
   prefixes/endpoints cannot authorize budget continuation. Default `keep` retains data.
+- After valid trajectory pruning, clear every durable checkpoint reference before
+  deleting payload generations. Active and unpruned runs keep fallback checkpoints;
+  old pruned output is reclaimed through explicit previewable settled cleanup.
+  Recovery omits checkpoints of proven pruned runs without traversing their payloads.
+  Read supported old formats in place; do not migrate on ordinary execution.
 - `recording.metric_retention: until_aggregated` deletes a group's metric cache
   generations only after its matching aggregate is validated. The aggregate
   proves reuse and figure regeneration without its discarded metrics. Preserve
