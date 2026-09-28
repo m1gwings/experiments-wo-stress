@@ -216,12 +216,17 @@ class AnalysisGraph:
                 labels = aggregate_labels[dependency]
                 partition = (
                     canonical_json({label: labels[label] for label in partition_by})
-                    if partition_by is not None else ""
+                    if partition_by is not None
+                    else ""
                 )
                 partitions[partition].append(dependency)
             for partition, selected in sorted(partitions.items()):
                 dependencies = tuple(selected)
-                node_id = f"figure:{name}:{fingerprint(partition)[:20]}" if partition else f"figure:{name}"
+                node_id = (
+                    f"figure:{name}:{fingerprint(partition)[:20]}"
+                    if partition
+                    else f"figure:{name}"
+                )
                 subject = f"{name} / {partition}" if partition else name
                 self.nodes[node_id] = _Node(
                     node_id,

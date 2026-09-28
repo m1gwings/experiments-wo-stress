@@ -152,10 +152,14 @@ class DependencyAnalysisTests(unittest.TestCase):
         runs = deepcopy(self.config.runs)
         runs[0]["grid"] = {"data.params.size": [2, 3]}
         analysis = deepcopy(self.config.analysis)
-        analysis["figures"] = [{
-            "name": "by-size", "type": "tests.test_dependency_analysis:_GroupPlotter",
-            "metric": "reward", "partition_by": ["data.params.size"],
-        }]
+        analysis["figures"] = [
+            {
+                "name": "by-size",
+                "type": "tests.test_dependency_analysis:_GroupPlotter",
+                "metric": "reward",
+                "partition_by": ["data.params.size"],
+            }
+        ]
         config = replace(self.config, runs=runs, analysis=analysis)
         self.specs = plan_runs(config)
         self.publish_request()
