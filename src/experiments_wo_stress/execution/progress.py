@@ -419,7 +419,7 @@ class TerminalProgress:
             return f"preparing study | elapsed {_duration(now - self.started)}"
         done = self.counts["completed"] + self.counts["skipped"]
         summary = (
-            f"{done}/{self.total} completed | {len(self.active) + len(self.tasks)} running | "
+            f"RUNS {done}/{self.total} completed | {len(self.active) + len(self.tasks)} running | "
             f"{self.queued} queued | {self.counts['failed']} failed | "
             f"elapsed {_duration(now - self.started)} | {self._estimate_text(now, finish=False)}"
         )

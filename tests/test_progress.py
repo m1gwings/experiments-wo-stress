@@ -236,6 +236,7 @@ class TerminalProgressTests(unittest.TestCase):
         self.assertIsNone(display.remaining(20))
         self.assertEqual(display._simulation_remaining(20), 45)
         self.assertIn("SIM remaining ~45s | analysis PENDING", display._summary(20))
+        self.assertTrue(display._summary(20).startswith("RUNS "))
         display.console.print(display.render(20))
         rendered = self.stream.getvalue()
         self.assertIn("SIM finish ~", rendered)

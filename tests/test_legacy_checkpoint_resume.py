@@ -8,7 +8,7 @@ from pathlib import Path
 
 import yaml
 
-from experiments_wo_stress.execution.compatibility import legacy_047f_implementation
+from experiments_wo_stress.execution.compatibility import legacy_implementations
 from experiments_wo_stress.execution.provenance import (
     collect_provenance,
     prepare_request,
@@ -19,7 +19,7 @@ from experiments_wo_stress.study.planning import plan_runs
 
 
 class LegacyVariantSelectionTests(unittest.TestCase):
-    """Require an existing matching 047fbc5 identity before reusing its run path."""
+    """Require a matching 047fbc5 or e60b9bb identity before reusing its run path."""
 
     def test_exact_legacy_variant_is_selected_but_changed_source_is_not(self):
         with tempfile.TemporaryDirectory() as temporary:
@@ -46,21 +46,36 @@ class LegacyVariantSelectionTests(unittest.TestCase):
             config = load_config(config_path)
             specs = plan_runs(config)
             provenance = collect_provenance(config, {})
-            legacy = legacy_047f_implementation(provenance["implementation"])
-            self.assertIsNotNone(legacy)
-            old_provenance = {**provenance, "implementation": legacy}
-            old = prepare_request(config, specs, old_provenance)
+            legacy_options = legacy_implementations(provenance["implementation"])
+            self.assertEqual(len(legacy_options), 2)
             current = prepare_request(config, specs, provenance, root)
-            self.assertNotEqual(current.locations, old.locations)
+            legacy_locations = []
+            for legacy in legacy_options:
+                old_provenance = {**provenance, "implementation": legacy}
+                old = prepare_request(config, specs, old_provenance)
+                legacy_locations.append(old.locations)
+                self.assertNotEqual(current.locations, old.locations)
+                old_id = next(iter(old.variants))
+                metadata = root / "runs" / old_id / "metadata.json"
+                atomic_json(metadata, old.variants[old_id])
+                selected = prepare_request(config, specs, provenance, root)
+                self.assertEqual(selected.locations, old.locations)
+                self.assertEqual(
+                    selected.variants[old_id]["identity"], old.variants[old_id]["identity"]
+                )
+                metadata.unlink()
+            old = prepare_request(
+                config, specs, {**provenance, "implementation": legacy_options[0]}
+            )
             old_id = next(iter(old.variants))
+            current_id = next(iter(current.variants))
             atomic_json(root / "runs" / old_id / "metadata.json", old.variants[old_id])
-            selected = prepare_request(config, specs, provenance, root)
-            self.assertEqual(selected.locations, old.locations)
+            atomic_json(root / "runs" / current_id / "metadata.json", current.variants[current_id])
             self.assertEqual(
-                selected.variants[old_id]["identity"], old.variants[old_id]["identity"]
+                prepare_request(config, specs, provenance, root).locations, current.locations
             )
             changed = {**provenance, "implementation": {**provenance["implementation"]}}
             changed["implementation"]["execution/scheduler.py"] = "future edit"
-            self.assertNotEqual(
-                prepare_request(config, specs, changed, root).locations, old.locations
+            self.assertNotIn(
+                prepare_request(config, specs, changed, root).locations, legacy_locations
             )

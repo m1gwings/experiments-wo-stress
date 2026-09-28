@@ -342,7 +342,7 @@ for the precise guarantees and limitations. Cloud deployment, environment locks,
 and automatic repeated `cloud-run` continuation belong to
 [cloud-experiments](https://github.com/m1gwings/cloud-experiments).
 The strict CPU reader also recognizes retained checkpoints from the exact
-`047fbc5` implementation when their saved scientific and environment identity
+`047fbc5` and `e60b9bb` implementations when their saved scientific and environment identity
 matches; it leaves their bytes and variant metadata intact.
 
 Cloud wrappers can use the versioned [recovery snapshot API](docs/CLOUD.md#versioned-recovery-snapshots) to persist committed output without interpreting private checkpoint paths.

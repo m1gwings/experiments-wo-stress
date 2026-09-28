@@ -26,7 +26,7 @@ from ..storage.files import (
 from ..study.config import ExperimentConfig
 from ..study.planning import plan_runs
 from ..study.specs import ComponentSpec, RunSpec
-from .compatibility import implementation_digest, legacy_047f_implementation
+from .compatibility import implementation_digest, legacy_implementations
 from .portability import portable_environment
 
 
@@ -280,10 +280,10 @@ def prepare_request(
     source_cache = {}
     hashed: dict[Path, str] = {}
     extension_support: dict[str, bool] = {}
-    legacy_implementation = (
-        legacy_047f_implementation(provenance["implementation"])
+    legacy_options = (
+        legacy_implementations(provenance["implementation"])
         if retained_root is not None and not config.execution.get("gpu_ids")
-        else None
+        else ()
     )
     for spec in specs:
         sources = {}
@@ -316,7 +316,13 @@ def prepare_request(
             "budget": None if extendable else spec.budget_steps,
         }
         storage_id = fingerprint(identity)[:32]
-        if legacy_implementation is not None:
+        current_variant = (
+            retained_root / "runs" / storage_id / "metadata.json" if retained_root else None
+        )
+        legacy_candidates = (
+            legacy_options if current_variant is None or not current_variant.is_file() else ()
+        )
+        for legacy_implementation in legacy_candidates:
             legacy_code = fingerprint(
                 {
                     "implementation": legacy_implementation,
@@ -329,6 +335,7 @@ def prepare_request(
             legacy_path = retained_root / "runs" / legacy_id / "metadata.json"
             if legacy_path.is_file() and read_json(legacy_path).get("identity") == legacy_identity:
                 identity, code_signature, storage_id = legacy_identity, legacy_code, legacy_id
+                break
         locations[spec.run_id] = storage_id
         requests[storage_id] = spec.to_dict()
         variants[storage_id] = {

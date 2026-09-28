@@ -243,8 +243,8 @@ including interruption, so their retained derivations remain reusable after rest
 After restore, EWS still performs its ordinary scientific,
 environment, dependency, variant, and checkpoint validation; byte integrity alone
 does not promise compatibility with a replacement VM or checkpoint decoder.
-For CPU outputs written by EWS `047fbc5`, the current reader recognizes the
-exact reviewed implementation revision and can select its retained run variant
+For CPU outputs written by EWS `047fbc5` or `e60b9bb`, the current reader
+recognizes the exact reviewed implementation revision and can select its retained run variant
 when the saved identity, scientific source, recording, and strict environment
 still match. This permits same-environment checkpoint continuation without
 rewriting the checkpoint. It does not relax cross-host compatibility checks or

@@ -70,7 +70,7 @@ _LEGACY_047F_BRIDGE: dict[str, tuple[str, str | None]] = {
         "415420bf9df2ddef783c3d07efb5ace788b13b25479607d6ae73b16fa3a89423",
     ),
     "execution/provenance.py": (
-        "92808b9271c79e9e91e118f14c76206e9e8f71c8cfd05df66f99fb49c3d85081",
+        "1db252f3ce15945dd8f592a9673cedbc2e2cc93f2299adc6cfad57b001249ae3",
         "e31edfdb26117bdd868814bb1350056cef6666861cab2a95d4c4df823376d1a2",
     ),
     "execution/resources.py": (
@@ -92,16 +92,39 @@ _LEGACY_047F_BRIDGE: dict[str, tuple[str, str | None]] = {
 }
 
 
-def legacy_047f_implementation(implementation: Mapping[str, str]) -> dict[str, str] | None:
-    """Reconstruct the exact 047fbc5 signature only for reviewed source revisions."""
-    if any(
-        implementation.get(name) != current for name, (current, _) in _LEGACY_047F_BRIDGE.items()
-    ):
+# e60b9bb already contains the DAG and recovery catalog. The only strict
+# simulation-fingerprint differences are these reviewed coordinator/provenance
+# edits; the run writer, decoder, and scientific component code are unchanged.
+_LEGACY_E60_BRIDGE: dict[str, tuple[str, str | None]] = {
+    "execution/coordinator.py": (
+        "0ae37851113dcf1b8b3de08ff0a86c749696b9c9d5bf52d67caeb910413c62dc",
+        "a935d6a7a3bdc80f125d2c9dfcc6bf7674e6990cda1f864d594c4dfb5fef7eb6",
+    ),
+    "execution/provenance.py": (
+        "1db252f3ce15945dd8f592a9673cedbc2e2cc93f2299adc6cfad57b001249ae3",
+        "e389cc73db33ad0e9c3727a564405b5f00d8de6964327a93b2560e92f865753c",
+    ),
+}
+
+
+def _legacy_implementation(
+    implementation: Mapping[str, str], bridge: Mapping[str, tuple[str, str | None]]
+) -> dict[str, str] | None:
+    if any(implementation.get(name) != current for name, (current, _) in bridge.items()):
         return None
     legacy = dict(implementation)
-    for name, (_, old) in _LEGACY_047F_BRIDGE.items():
+    for name, (_, old) in bridge.items():
         if old is None:
             legacy.pop(name)
         else:
             legacy[name] = old
     return legacy
+
+
+def legacy_implementations(implementation: Mapping[str, str]) -> tuple[dict[str, str], ...]:
+    """Offer only reviewed 047fbc5/e60b9bb signatures for retained CPU variants."""
+    return tuple(
+        result
+        for bridge in (_LEGACY_E60_BRIDGE, _LEGACY_047F_BRIDGE)
+        if (result := _legacy_implementation(implementation, bridge)) is not None
+    )
