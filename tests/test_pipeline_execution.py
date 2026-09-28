@@ -215,6 +215,77 @@ class RetentionBoundaryTests(_PipelineCase):
 class DependencyReuseTests(_PipelineCase):
     """Only missing requested descendants and necessary raw ancestors are executed."""
 
+    def test_aggregated_metrics_are_discarded_without_losing_exact_or_figure_reuse(self) -> None:
+        settings = self.pipeline_settings()
+        settings["recording"]["metric_retention"] = "until_aggregated"
+        config = self.load_study_config(settings)
+        output = self.root / "compact"
+        report, kinds = self.run_with_task_counts(config, output)
+        self.assertEqual((report.completed, kinds), (2, {"metric": 2, "aggregate": 1, "figure": 1}))
+        self.assert_pruned(output)
+        self.assertFalse(list((output / "analysis" / "cache" / "metrics").glob("[0-9a-f]*")))
+        self.assertTrue(list((output / "analysis" / "cache" / "aggregates").glob("*")))
+        self.assertTrue(list((output / "analysis" / "figures").glob("*")))
+
+        snapshot = create_snapshot(output, self.root / "compact-snapshot")
+        restored = restore_snapshot(snapshot, self.root / "compact-restored")
+        with patch(
+            "experiments_wo_stress.execution.coordinator.execute_run",
+            side_effect=AssertionError("unexpected simulation"),
+        ):
+            report, kinds = self.run_with_task_counts(config, restored)
+            self.assertEqual((report.skipped, kinds), (2, {}))
+            settings["analysis"]["figures"][0]["title"] = "Presentation change"
+            report, kinds = self.run_with_task_counts(self.load_study_config(settings), restored)
+            self.assertEqual((report.skipped, kinds), (2, {"figure": 1}))
+
+    def test_enabling_metric_retention_prunes_existing_groups_without_reexecution(self) -> None:
+        settings = self.pipeline_settings()
+        output = self.root / "output"
+        run_experiment(self.load_study_config(settings), output)
+        metrics = output / "analysis" / "cache" / "metrics"
+        self.assertEqual(len(list(metrics.glob("*/result.npz"))), 2)
+        settings["recording"]["metric_retention"] = "until_aggregated"
+        with patch(
+            "experiments_wo_stress.execution.coordinator.execute_run",
+            side_effect=AssertionError("unexpected simulation"),
+        ):
+            report, kinds = self.run_with_task_counts(self.load_study_config(settings), output)
+        self.assertEqual((report.skipped, kinds), (2, {}))
+        self.assertFalse(list(metrics.glob("*/result.npz")))
+
+    def test_changed_aggregation_recomputes_only_missing_metric_ancestors(self) -> None:
+        settings = self.pipeline_settings()
+        settings["recording"]["metric_retention"] = "until_aggregated"
+        output = self.root / "output"
+        run_experiment(self.load_study_config(settings), output)
+        settings["analysis"]["aggregator"]["uncertainty"] = "none"
+        report, kinds = self.run_with_task_counts(self.load_study_config(settings), output)
+        self.assertEqual((report.completed, kinds), (2, {"metric": 2, "aggregate": 1, "figure": 1}))
+        self.assert_pruned(output)
+
+    def test_failed_aggregate_retains_metrics_until_retry(self) -> None:
+        settings = self.pipeline_settings()
+        settings["recording"]["metric_retention"] = "until_aggregated"
+        config = self.load_study_config(settings)
+        output = self.root / "output"
+
+        def fail_aggregate(task):
+            if task.kind == "aggregate":
+                raise RuntimeError("injected aggregate failure")
+            execute_derivation(task)
+
+        with patch(
+            "experiments_wo_stress.analysis.graph.execute_derivation", side_effect=fail_aggregate
+        ):
+            report = run_experiment(config, output)
+        self.assertEqual(report.task_failures, 1)
+        metrics = output / "analysis" / "cache" / "metrics"
+        self.assertEqual(len(list(metrics.glob("*/result.npz"))), 2)
+        report, kinds = self.run_with_task_counts(config, output)
+        self.assertEqual((report.skipped, kinds), (2, {"aggregate": 1, "figure": 1}))
+        self.assertFalse(list(metrics.glob("*/result.npz")))
+
     def test_exact_rerun_after_pruning_executes_no_simulations_or_derivations(self) -> None:
         config = self.load_study_config(self.pipeline_settings())
         output = self.root / "output"

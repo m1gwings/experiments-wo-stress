@@ -28,6 +28,16 @@ from experiments_wo_stress.study.config import ExperimentConfig
 from experiments_wo_stress.study.planning import plan_runs
 
 
+class _GroupPlotter:
+    """Write one distinct figure artifact for each completed summary partition."""
+
+    def plot(self, summaries, figure, output_dir):
+        size = summaries[0].labels["data.params.size"]
+        path = output_dir / f"size-{size}.csv"
+        path.write_text(f"size,mean\n{size},{summaries[0].mean[-1]}\n", encoding="utf-8")
+        return [path]
+
+
 def _dispatch_without_uncertainty(task):
     """Model an output-affecting graph implementation edit without changing its YAML."""
     if task.kind == "aggregate":
@@ -136,6 +146,49 @@ class DependencyAnalysisTests(unittest.TestCase):
         target = settings[section] if section == "aggregator" else settings[section][0]
         target[key] = value
         return replace(self.config, analysis=settings)
+
+    def test_partitioned_figure_exports_while_unrelated_group_is_unfinished(self):
+        """Only selected aggregate summaries gate each figure and metric cleanup."""
+        runs = deepcopy(self.config.runs)
+        runs[0]["grid"] = {"data.params.size": [2, 3]}
+        analysis = deepcopy(self.config.analysis)
+        analysis["figures"] = [{
+            "name": "by-size", "type": "tests.test_dependency_analysis:_GroupPlotter",
+            "metric": "reward", "partition_by": ["data.params.size"],
+        }]
+        config = replace(self.config, runs=runs, analysis=analysis)
+        self.specs = plan_runs(config)
+        self.publish_request()
+        for spec in self.specs:
+            if spec.data.params["size"] == 2:
+                self.save_run(spec)
+        graph = self.graph(config)
+        self.assertEqual(len([node for node in graph.nodes.values() if node.kind == "figure"]), 2)
+        while not (self.root / "analysis/figures/size-2.csv").is_file():
+            tasks = graph.ready_tasks()
+            self.assertTrue(tasks)
+            for task in tasks:
+                execute_derivation(task)
+                graph.finish(task)
+        self.assertTrue(graph.required_simulations)
+        self.assertFalse(graph.complete)
+        self.assertFalse((self.root / "analysis/figures/size-3.csv").exists())
+
+        for spec in self.specs:
+            if spec.data.params["size"] == 3:
+                self.save_run(spec)
+                graph.refresh(spec.run_id)
+        self.drain(graph)
+        self.assertTrue((self.root / "analysis/figures/size-3.csv").is_file())
+
+    def test_figure_partition_requires_valid_aggregation_labels(self):
+        for partition_by in (["unknown"], ["data.params.size", "data.params.size"], []):
+            with self.subTest(partition_by=partition_by):
+                analysis = deepcopy(self.config.analysis)
+                analysis["figures"][0]["partition_by"] = partition_by
+                analysis["figures"][0]["type"] = "tests.test_dependency_analysis:_GroupPlotter"
+                with self.assertRaisesRegex(ValueError, "partition_by"):
+                    self.graph(replace(self.config, analysis=analysis))
 
     def test_exact_reuse_after_pruning_needs_no_raw_or_metric_reads(self):
         graph = self.materialize()

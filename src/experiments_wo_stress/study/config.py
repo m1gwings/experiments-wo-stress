@@ -35,6 +35,7 @@ _RECORDING = {
     "fields": None,
     "buffer_bytes": 16 * 1024 * 1024,
     "retention": "keep",
+    "metric_retention": "keep",
 }
 _DISPLAY = {"timezone": "UTC"}
 _CSV_TYPES = {"csv", "experiments_wo_stress.data:CSVDataGenerator"}
@@ -398,6 +399,8 @@ def _recording_settings(value: Any) -> dict[str, Any]:
     recording = {**_RECORDING, **recording}
     if recording["retention"] not in ("keep", "until_analyzed"):
         raise ValueError("recording.retention must be keep or until_analyzed")
+    if recording["metric_retention"] not in ("keep", "until_aggregated"):
+        raise ValueError("recording.metric_retention must be keep or until_aggregated")
     for key in ("every_steps", "buffer_bytes"):
         _integer(recording[key], f"recording.{key}", 1)
     fields = recording["fields"]

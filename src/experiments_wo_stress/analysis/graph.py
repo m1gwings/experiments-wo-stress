@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import inspect
+import json
 from collections import defaultdict
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +17,7 @@ from ..study.specs import RunSpec, canonical_json
 from . import metric_tasks, pipeline
 from . import metrics as metric_definitions
 from .cache import AnalysisCache, cache_identity, safe_name, source_identity
+from .retention import prune_metric_generations
 
 if TYPE_CHECKING:
     from ..study.config import ExperimentConfig
@@ -86,6 +88,8 @@ class AnalysisGraph:
         self.locations = locations
         self.group_by, self.uncertainty = pipeline._aggregation_options(config.analysis)
         self.points = analysis_points(config.analysis)
+        self._prune_metrics = config.recording.get("metric_retention") == "until_aggregated"
+        self._prune_existing = self._prune_metrics
         self.nodes: dict[str, _Node] = {}
         self.references: dict[str, dict[str, Any] | None] = {}
         self.metric_nodes: dict[str, list[str]] = defaultdict(list)
@@ -154,8 +158,10 @@ class AnalysisGraph:
                 self.metric_nodes[spec.run_id].append(node_id)
                 grouped[name, unit].append(node_id)
         aggregate_nodes: dict[str, list[str]] = defaultdict(list)
+        aggregate_labels: dict[str, dict[str, Any]] = {}
         for (name, unit), dependencies in sorted(grouped.items()):
             node_id = f"aggregate:{name}:{fingerprint(unit)[:20]}"
+            aggregate_labels[node_id] = json.loads(unit)
             self.nodes[node_id] = _Node(
                 node_id,
                 "aggregate",
@@ -189,18 +195,43 @@ class AnalysisGraph:
             if name in names:
                 raise ValueError(f"Duplicate figure name {name!r}")
             names.add(name)
-            implementation, _ = _figure_implementation(declaration)
-            dependencies = tuple(aggregate_nodes[metric])
-            node_id = f"figure:{name}"
-            self.nodes[node_id] = _Node(
-                node_id,
-                "figure",
-                name,
-                tuple(run_id for dep in dependencies for run_id in self.nodes[dep].run_ids),
-                dependencies,
-                {"figure": declaration, "name": name, "implementation": implementation},
-            )
-            self._targets.append(node_id)
+            partition_by = declaration.get("partition_by")
+            if partition_by is not None:
+                if declaration.get("type", "line") == "line":
+                    raise ValueError("Figure partition_by requires a custom plotter")
+                if (
+                    not isinstance(partition_by, list)
+                    or not partition_by
+                    or any(not isinstance(label, str) for label in partition_by)
+                    or len(set(partition_by)) != len(partition_by)
+                    or any(label not in self.group_by for label in partition_by)
+                ):
+                    raise ValueError("Figure partition_by must list distinct aggregation labels")
+            # Scheduling metadata is not passed to the plotter. Its ordinary figure
+            # declaration and the selected aggregate keys determine each cache key.
+            figure = {key: value for key, value in declaration.items() if key != "partition_by"}
+            implementation, _ = _figure_implementation(figure)
+            partitions: dict[str, list[str]] = defaultdict(list)
+            for dependency in aggregate_nodes[metric]:
+                labels = aggregate_labels[dependency]
+                partition = (
+                    canonical_json({label: labels[label] for label in partition_by})
+                    if partition_by is not None else ""
+                )
+                partitions[partition].append(dependency)
+            for partition, selected in sorted(partitions.items()):
+                dependencies = tuple(selected)
+                node_id = f"figure:{name}:{fingerprint(partition)[:20]}" if partition else f"figure:{name}"
+                subject = f"{name} / {partition}" if partition else name
+                self.nodes[node_id] = _Node(
+                    node_id,
+                    "figure",
+                    subject,
+                    tuple(run_id for dep in dependencies for run_id in self.nodes[dep].run_ids),
+                    dependencies,
+                    {"figure": figure, "name": name, "implementation": implementation},
+                )
+                self._targets.append(node_id)
 
     def refresh(self, run_id: str | None = None) -> None:
         """Read newly committed result references and resolve requested dependencies.
@@ -379,6 +410,11 @@ class AnalysisGraph:
 
     def ready_tasks(self) -> list[DerivationTask]:
         """Return runnable derivations, prioritizing raw-consuming metrics."""
+        if self._prune_existing:
+            self._prune_existing = False
+            for node in self.nodes.values():
+                if node.kind == "aggregate":
+                    self._prune_aggregate_metrics(node)
         tasks = []
         for node_id in self._ready:
             node = self.nodes[node_id]
@@ -416,6 +452,18 @@ class AnalysisGraph:
         self._reconcile(task.id)
         for parent in self._dependents[task.id]:
             self._reconcile(parent)
+        if node.kind == "aggregate":
+            self._prune_aggregate_metrics(node)
+
+    def _prune_aggregate_metrics(self, node: _Node) -> None:
+        """Keep a validated summary, then release only the metrics it consumed."""
+        if not self._prune_metrics or not self._available(node):
+            return
+        dependencies = [self.nodes[dependency] for dependency in node.dependencies]
+        prune_metric_generations(self.output_dir, [dep.key for dep in dependencies if dep.key])
+        for dependency in dependencies:
+            dependency.directory = None
+            dependency.checked_key = None
 
     def metric_proofs(self, run_id: str) -> dict[str, str] | None:
         """Prove every configured per-run metric is durably retained before pruning."""
