@@ -116,6 +116,7 @@ class ExecutionCoordinator:
         self.variants: dict[str, dict] = {}
         self.scheduler: TaskScheduler | None = None
         self.notifier: ExperimentNotifier | None = None
+        self._initial_reused_tasks: set[str] = set()
 
     @observe_execution
     def run(self) -> RunReport:
@@ -169,6 +170,12 @@ class ExecutionCoordinator:
         if self.progress and self.scheduler.graph:
             totals = Counter(self._task_label(node) for node in self.scheduler.graph.nodes.values())
             self.progress.configure_tasks(dict(totals))
+            self._initial_reused_tasks = self.scheduler.graph.satisfied_task_ids
+            reused = Counter(
+                self._task_label(self.scheduler.graph.nodes[node_id])
+                for node_id in self._initial_reused_tasks
+            )
+            self.progress.reuse_tasks(dict(reused))
 
     def _run_with_gpus(self) -> RunReport:
         """Prepare and run science only in processes with lifetime GPU assignments."""
@@ -355,6 +362,7 @@ class ExecutionCoordinator:
                     self._task_label(node)
                     for node in self.scheduler.graph.nodes.values()
                     if node.id not in self.scheduler.finished
+                    and node.id not in self._initial_reused_tasks
                 )
                 self.progress.reuse_tasks(dict(reused))
             if self.config.analysis.get("figures"):

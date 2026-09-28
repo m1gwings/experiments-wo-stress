@@ -17,6 +17,7 @@ import numpy as np
 from experiments_wo_stress import run_experiment
 from experiments_wo_stress.analysis import analyze
 from experiments_wo_stress.analysis.graph import execute_derivation
+from experiments_wo_stress.execution.progress import TerminalProgress
 from experiments_wo_stress.execution.worker import RunSession
 from experiments_wo_stress.plotting import plot
 from experiments_wo_stress.storage import StorageError, atomic_json, fingerprint, read_json
@@ -58,7 +59,7 @@ class _PipelineCase(_ExecutionStudyTestCase):
             metadata = read_json(directory / "metadata.json")
             self.assertTrue((output / "instances" / metadata["instance_id"]).is_dir())
 
-    def run_with_task_counts(self, config, output: Path):
+    def run_with_task_counts(self, config, output: Path, *, progress=None):
         kinds = Counter()
 
         def execute(task):
@@ -66,7 +67,7 @@ class _PipelineCase(_ExecutionStudyTestCase):
             return execute_derivation(task)
 
         with patch("experiments_wo_stress.analysis.graph.execute_derivation", side_effect=execute):
-            report = run_experiment(config, output)
+            report = run_experiment(config, output, progress=progress)
         self.assertEqual((report.failed, report.task_failures), (0, 0), report.errors)
         return report, kinds
 
@@ -215,6 +216,26 @@ class RetentionBoundaryTests(_PipelineCase):
 class DependencyReuseTests(_PipelineCase):
     """Only missing requested descendants and necessary raw ancestors are executed."""
 
+    def test_retained_figure_is_counted_before_new_figure_runs(self) -> None:
+        settings = self.pipeline_settings()
+        settings["analysis"]["figures"][0]["name"] = "original"
+        config = self.load_study_config(settings)
+        output = self.root / "output"
+        self.assertEqual(run_experiment(config, output).task_failures, 0)
+
+        settings["analysis"]["figures"].append(
+            {"name": "additional", "type": "line", "metric": "reward", "formats": ["tikz"]}
+        )
+        config = self.load_study_config(settings)
+        display = TerminalProgress("study", 1, quiet=True)
+        with patch.object(display, "reuse_tasks", wraps=display.reuse_tasks) as reused:
+            report = run_experiment(config, output, progress=display)
+        self.assertEqual(report.task_failures, 0)
+        self.assertEqual(display.task_totals["FIGURE"], 2)
+        self.assertEqual(reused.call_args_list[0].args[0]["FIGURE"], 1)
+        self.assertEqual(display.task_counts["FIGURE"]["skipped"], 1)
+        self.assertEqual(display.task_counts["FIGURE"]["completed"], 1)
+
     def test_aggregated_metrics_are_discarded_without_losing_exact_or_figure_reuse(self) -> None:
         settings = self.pipeline_settings()
         settings["recording"]["metric_retention"] = "until_aggregated"
@@ -233,8 +254,11 @@ class DependencyReuseTests(_PipelineCase):
             "experiments_wo_stress.execution.coordinator.execute_run",
             side_effect=AssertionError("unexpected simulation"),
         ):
-            report, kinds = self.run_with_task_counts(config, restored)
+            display = TerminalProgress("study", 1, quiet=True)
+            with patch.object(display, "reuse_tasks", wraps=display.reuse_tasks) as reused:
+                report, kinds = self.run_with_task_counts(config, restored, progress=display)
             self.assertEqual((report.skipped, kinds), (2, {}))
+            self.assertEqual(reused.call_args_list[0].args[0], {"METRIC": 2, "AGG": 1, "FIGURE": 1})
             settings["analysis"]["figures"][0]["title"] = "Presentation change"
             report, kinds = self.run_with_task_counts(self.load_study_config(settings), restored)
             self.assertEqual((report.skipped, kinds), (2, {"figure": 1}))

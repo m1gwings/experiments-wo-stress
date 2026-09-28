@@ -29,9 +29,10 @@ _OBSERVATIONAL_REVISIONS = {
         "7a90349cd560b36a66a95c67d0a801204d3135f1a22547d4e81dbeb0fde8a913",
         "001a4f83ab819b7d32ba14fb3e12f0c47b0247d96bb18c6906aded295bdb7ac6",
     ),
+    # Startup credit for retained analysis work changes only terminal observation.
     "execution/coordinator.py": (
-        "3953ebbb374ce6e8d0b1b4f0f3bdc1100eaef8816390f8b9950ba3308ffa475c",
-        "415420bf9df2ddef783c3d07efb5ace788b13b25479607d6ae73b16fa3a89423",
+        "5afe16f797c7948be3bc502206b53701378e72021631b259c2e8e32d48bd131d",
+        "0ae37851113dcf1b8b3de08ff0a86c749696b9c9d5bf52d67caeb910413c62dc",
     ),
     "execution/resources.py": (
         "0969b5c26b530ccec9dc414803f8ae3c6f52cbe8aafb6c9b6c9cc39befdb2602",

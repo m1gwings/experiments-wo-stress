@@ -46,6 +46,10 @@ class LegacyVariantSelectionTests(unittest.TestCase):
             config = load_config(config_path)
             specs = plan_runs(config)
             provenance = collect_provenance(config, {})
+            self.assertEqual(
+                provenance["implementation"]["execution/coordinator.py"],
+                "0ae37851113dcf1b8b3de08ff0a86c749696b9c9d5bf52d67caeb910413c62dc",
+            )
             legacy_options = legacy_implementations(provenance["implementation"])
             self.assertEqual(len(legacy_options), 2)
             current = prepare_request(config, specs, provenance, root)

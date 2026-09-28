@@ -270,10 +270,12 @@ reused and failed runs do not train the estimate. Estimates are approximate,
 especially for heterogeneous runs or resumed prefixes. While metrics,
 aggregations, or figures remain pending, the dashboard labels the observed
 simulation-only estimate `SIM remaining` and `SIM finish`, followed by
-`analysis pending`. This is not a prediction of the study's final completion time. It
+`analysis PENDING` or `analysis RUNNING` according to current derived work.
+This is not a prediction of the study's final completion time. It
 appears after a completed simulation even when analysis has a large backlog;
 the overall ETA remains indeterminate until derived work is complete. Dashboard
-completed counts include reused results; the final summary lists reuse separately.
+completed counts include tasks satisfied by retained results from the start of
+a resumed invocation; the final summary lists reuse separately.
 
 The Python `run_experiment` API remains silent by default. Its optional
 `progress=` argument accepts an entered `TerminalProgress(name, workers,

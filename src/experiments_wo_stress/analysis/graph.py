@@ -396,6 +396,15 @@ class AnalysisGraph:
         return all(self._available(self.nodes[target]) for target in self._targets)
 
     @property
+    def satisfied_task_ids(self) -> set[str]:
+        """Tasks already covered by a retained generation at graph initialization."""
+        return {
+            node.id
+            for node in self.nodes.values()
+            if node.directory is not None or not self._needed_by[node.id]
+        }
+
+    @property
     def task_counts(self) -> dict[str, int]:
         """Expose observational totals without making them part of artifact identity."""
         return {
