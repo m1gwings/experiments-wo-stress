@@ -363,6 +363,13 @@ retained metrics after deletion. Instances, provenance, checkpoint files, logs,
 and compute history remain. Without configured metrics, raw trajectories remain.
 The saved state distinguishes intentional pruning from corruption.
 
+For a screening grid, `recording.metric_retention: until_aggregated` also removes
+per-run metric cache generations once each group's aggregate is durable. Summaries
+and figures stay available. Changing figures reuses aggregates; changing the
+aggregator recomputes metrics from retained raw data or requires `ews run` to
+rematerialize missing raw ancestors. The default `keep` retains metric caches.
+This setting can be enabled for existing output without changing scientific IDs.
+
 Increasing the budget still requires proof of correct continuation and a usable
 raw prefix and endpoint. After pruning, EWS conservatively runs the required
 simulation fresh; it does not assume metrics compose incrementally. Switching
@@ -594,6 +601,11 @@ while TikZ export does not require LaTeX until compilation. A custom plotter use
 `plot(summaries, figure, output_dir) -> Iterable[Path]`.
 Each summary provides its metric, group labels, coordinates, mean, uncertainty,
 repetition count, and uncertainty convention.
+For incremental plots, add `partition_by: [group, data.params.utility.name]` to
+a custom figure declaration, selecting labels from the aggregator's `group_by`.
+Each partition gets a separate worker task once its matching summaries exist;
+the plotter receives only those summaries and must give partitions distinct
+output filenames. Without this option the figure waits for every group.
 
 Grid axes under `algorithm.params.*`, `data.params.*`, or `protocol.params.*`
 combine with algorithms and repetitions. Separate groups when algorithms need
@@ -650,6 +662,11 @@ aggregation groups, derived from the actual `group_by` and supported `reduce_ove
 settings. Regular simulation admission prevents starvation. GPU workers retain
 their fixed device assignments across all task kinds. Progress observations never
 determine dependency readiness or scientific state.
+Aggregation consumes all metric points before keeping the `analysis.points`
+subsample in a per-group CSV and NPZ. With `metric_retention: until_aggregated`,
+the full-resolution metric cache is removed as soon as that summary is validated.
+Partitioned plots can publish before other groups finish; the combined metric
+CSV and a global figure become available at invocation completion.
 
 Rerun the same command after interruption. Valid completed artifacts remain
 reusable even if unrelated work failed or paused. Recompute backwards only until

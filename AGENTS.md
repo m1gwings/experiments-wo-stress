@@ -78,6 +78,10 @@ contract, with real-paper validation still needed before declaring it stable.
   pruning proof before deletion. Missing unmarked data remains corruption;
   missing required raw ancestors may be rematerialized only by `run`. Pruned
   prefixes/endpoints cannot authorize budget continuation. Default `keep` retains data.
+- `recording.metric_retention: until_aggregated` deletes a group's metric cache
+  generations only after its matching aggregate is validated. The aggregate
+  proves reuse and figure regeneration without its discarded metrics. Preserve
+  exact unchanged requests, scoped recomputation, and interrupted deletion safety.
 - Terminal timezone and task progress are observational. Display explicit zones;
   keep persisted timestamps UTC and all display options outside identities.
 - Keep recovery in `storage/recovery.py`: versioned sealed snapshots under output

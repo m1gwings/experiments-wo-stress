@@ -72,7 +72,9 @@ def main(argv: list[str] | None = None) -> int:
             "run",
             "Run the study and produce its configured analysis and figures.",
             "Execute, resume, extend, or reuse the requested simulations and derived artifacts. "
-            "Metrics, aggregates, and figures run as their dependencies become durable. "
+            "Available workers also compute metrics, aggregates, and figures as their "
+            "dependencies become durable; partitioned custom figures can appear before "
+            "unrelated groups finish. "
             "This is the normal complete workflow; count-runs is optional and "
             "does not need to be invoked first.",
         ),

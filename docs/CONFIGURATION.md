@@ -320,6 +320,19 @@ per-run metrics are durably materialized and validated. It need not wait for
 aggregation or figures. Instances, provenance, checkpoint files, logs, and compute
 history remain. With no metrics configured, trajectories remain retained.
 
+`recording.metric_retention` independently accepts `keep` (default) or
+`until_aggregated`. The latter deletes the per-run metric cache generations
+consumed by a group after its matching aggregate generation is durably published
+and validated. Figures use that retained aggregate, so metric deletion can happen
+as each group finishes while other groups keep running. Other metric versions and
+aggregates remain untouched. The aggregate itself proves the deleted inputs;
+an interrupted deletion is completed on a later `run`. If an aggregation setting
+changes later, EWS recomputes missing metrics from retained raw observations, or
+`ews run` rematerializes only the required pruned runs. Saved-only `analyze` and
+`plot` never run simulations. Changing this retention option alone does not
+change scientific identity; enabling it on existing output prunes already
+aggregated metrics during the next `ews run`.
+
 Intentional pruning is recorded durably and differs from missing or corrupt
 data. Matching retained derived artifacts remain reusable after pruning. A changed
 metric needs its raw input again: `run` reuses it if retained, or rematerializes
@@ -703,14 +716,29 @@ conservative recomputation.
 
 `run` computes per-run metrics as simulations finish. Each aggregate becomes
 runnable when its own repetitions are ready, even while unrelated simulations
-continue. Each existing figure interface receives all group summaries for its
-selected metric, so it waits for those groups. Ready metrics receive priority,
+continue. By default a figure receives all summaries for its metric and waits
+for all groups. A custom plotter can add `partition_by` with a nonempty subset of
+the aggregator's `group_by` labels. EWS creates one figure task for each distinct
+partition; that task receives only its summaries and starts when those summaries
+are durable. For example, `partition_by: [group, data.params.utility.name]` lets
+one utility's plot finish while other utilities are still running. The custom
+plotter must use distinct output filenames across partitions. The figure setting
+changes only figure cache identities; already saved aggregate summaries are reused.
+Ready metrics receive priority,
 with bounded aging for aggregation and figures so ready outputs cannot starve.
 Simulations favor partially completed aggregation
 groups derived from `group_by` and the supported `reduce_over` semantics. The
 scheduler admits simulation work regularly to prevent starvation. All task kinds
 share the configured worker pool, including workers with fixed GPU assignments.
 Scheduling never changes scientific identities or RNG streams.
+
+Aggregation computes over full-resolution metrics and then writes each group's
+`analysis.points` subsample as a durable CSV and NPZ under `analysis/cache/aggregates/`.
+With `recording.metric_retention: until_aggregated`, the large per-run metrics are
+removed after that group summary is validated, even before its plot is ready.
+Small group summaries remain for figure changes and exact resumption. The combined
+`analysis/<metric>.csv` and NPZ are exported when the invocation finishes; a
+custom global table figure also waits for every group unless partitioned.
 
 `analyze` and `plot` never launch simulations. If a necessary raw ancestor was
 pruned and retained derived artifacts cannot satisfy the request, they diagnose

@@ -442,6 +442,18 @@ survive rematerialization so earlier retained derivations can remain reusable
 while a later budget is being replayed. A prefix-only request
 never deletes the unanalysed tail of a longer completed run.
 
+With `recording.metric_retention: until_aggregated`, each validated aggregate
+authorizes deletion of exactly the per-run metric generations it consumed.
+Deletion first renames each generation out of the visible cache and then removes
+it; recovery excludes interrupted hidden deletions. A later run completes any
+leftover deletion. The aggregate identity remains a durable dependency proof, so
+figures and exact requests do not need the removed metrics. Changing aggregation
+walks backward to raw observations or, if those too were pruned, to simulation.
+An aggregate contains the already subsampled per-group CSV and NPZ. Optional
+custom figure `partition_by` creates a dependent task for each label partition,
+so plots can publish as soon as their selected aggregate groups are complete.
+The combined CSV and any global figure still require all their groups.
+
 New metric work may need an intentionally pruned ancestor. Only `run` can
 rematerialize it with fresh component state and the original streams. Endpoint
 snapshots whose recorded prefix was removed do not authorize continuation; budget

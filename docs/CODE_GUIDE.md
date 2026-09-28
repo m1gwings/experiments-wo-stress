@@ -382,15 +382,22 @@ updates the mean and squared deviations without keeping every run in memory.
 Each `Summary` holds coordinates, mean, uncertainty, labels, and repetition count.
 `_subsample_summary` then bounds each curve using `analysis.points` before tables
 or figures are exported. Full-resolution metric caches and aggregation checks
-remain intact; CSV and figures retain the selected original coordinates.
+remain intact with the default retention policy; screening studies can delete
+metric caches once the subsampled group CSV and NPZ are validated. CSV and figures
+retain the selected original coordinates.
 
 [`analysis/cache.py`](../src/experiments_wo_stress/analysis/cache.py) contains
 `AnalysisCache`, which validates and publishes derived generations. It
 losslessly compresses newly published metric caches and reuses existing
 uncompressed generations without changing their identities.
+[`analysis/retention.py`](../src/experiments_wo_stress/analysis/retention.py)
+atomically removes metric generations after the dependency graph validates
+their matching group aggregate; the aggregate itself is the retained proof.
 [`analysis/figures.py`](../src/experiments_wo_stress/analysis/figures.py) turns
 summaries into Matplotlib or TikZ output, or calls a custom plotter. Its public
 `plot` entry point requests figure targets from the same dependency graph;
+custom figures can use `partition_by` on aggregation labels to publish independent
+figures while unrelated groups continue. Each partition needs distinct filenames.
 `export_figures` remains the legacy saved-summary export boundary. Reading saved
 results and producing standard figures does not require constructing the study's
 simulation components.
@@ -422,7 +429,7 @@ the interaction visible; temporary directories isolate persisted artifacts.
 | Test file | What it demonstrates |
 | --- | --- |
 | [test_scheduler.py](../tests/test_scheduler.py) | Lazy variant publication, source hashing, group completion preference, and simulation fairness. |
-| [test_pipeline_execution.py](../tests/test_pipeline_execution.py) | Retention, rematerialization, budget fallback, worker-independent results, and raw corruption boundaries. |
+| [test_pipeline_execution.py](../tests/test_pipeline_execution.py) | Trajectory and metric retention, rematerialization, budget fallback, worker-independent results, and raw corruption boundaries. |
 | [test_dependency_analysis.py](../tests/test_dependency_analysis.py) | Nearest retained ancestor reuse, separate invalidation, and per-group readiness. |
 | [test_display.py](../tests/test_display.py) | IANA timezone precedence, deterministic display, and observational configuration. |
 | [test_recovery.py](../tests/test_recovery.py) | Versioned snapshot inventories, safe restoration, fallback, pruning, and unsupported versions. |

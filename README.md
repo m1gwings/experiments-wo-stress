@@ -116,7 +116,8 @@ ews run examples/sequential_study/experiment.yml --output outputs/bandits --work
 
 `run` executes the requested dependency graph. Metrics run as trajectories finish,
 aggregates run when their repetitions are available, and figures run when their
-inputs are ready. Independent simulations can continue meanwhile. Figures appear
+inputs are ready. A custom figure can set `partition_by` to aggregation labels so
+each independent plot runs as soon as its own groups finish. Independent simulations can continue meanwhile. Figures appear
 in `outputs/bandits/analysis/figures/`. Interrupted invocations retain valid
 completed work for reuse.
 
@@ -125,6 +126,16 @@ raw trajectory chunks after all configured per-run metrics are durable, retainin
 instances and derived artifacts. Reuse stops at the nearest retained valid
 ancestor: figure changes reuse summaries, aggregator changes reuse metrics, and
 metric changes rematerialize simulations only when their raw input is gone.
+For screening studies that only need final summaries and figures, also set
+`recording.metric_retention: until_aggregated`. EWS removes a group's per-run
+metric caches after its summary is durable. Later figure changes reuse that
+summary; changing aggregation recomputes missing metrics from retained raw data
+or rematerializes the necessary runs if raw data was pruned. This setting can be
+enabled on an existing output without rerunning unchanged work.
+Aggregation uses every metric point, then stores the `analysis.points` subsample
+as a small per-group CSV and NPZ before removing the full-resolution metrics.
+The combined `analysis/<metric>.csv` is exported at the end of an invocation;
+partitioned figures can appear while other groups are still running.
 `keep` is the default. Select terminal wall-clock display with
 `display.timezone: Europe/Rome` or `ews run ... --timezone Europe/Rome`; every
 finish estimate includes its timezone, defaulting to UTC.

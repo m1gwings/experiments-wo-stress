@@ -112,7 +112,9 @@ Use separate directories for separate studies.
 `run` schedules simulation, metric, aggregation, and figure work when their
 required artifacts are ready. Completed groups can produce summaries while
 unrelated simulations continue. A paused or failed invocation keeps its committed
-artifacts, including any completed derivations, for resumption.
+artifacts, including any completed derivations, for resumption. Custom figures
+with `partition_by` can export plots as soon as their selected groups finish;
+the combined CSV waits for the completed invocation.
 `count-runs` is an optional preview of study size; you do not need to invoke it
 before `run`.
 
@@ -154,6 +156,9 @@ filesystem locking and atomic file replacement. With
 of trajectories alongside their retained metric artifacts. A changed metric
 whose raw input was deleted requires `ews run`; standalone `analyze` and `plot`
 never schedule simulations.
+`recording.metric_retention: until_aggregated` additionally removes per-run
+metric caches after each validated group aggregate is durable. Recovery snapshots
+retain those aggregates and figures without requiring the discarded metric files.
 
 ## Versioned recovery snapshots
 

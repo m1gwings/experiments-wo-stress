@@ -76,6 +76,7 @@ def test_repeated_component_files_are_fingerprinted_once_during_preparation(tmp_
 def test_metrics_release_raw_data_and_aggregation_precedes_unrelated_simulations(tmp_path):
     """A group closes even when a planner interleaves its repetitions with another group."""
     config = study(tmp_path)
+    config.recording["metric_retention"] = "until_aggregated"
     specs = plan_runs(config)
     interleaved = [spec for pair in zip(specs[:3], specs[3:]) for spec in pair]
     events = []
@@ -83,6 +84,12 @@ def test_metrics_release_raw_data_and_aggregation_precedes_unrelated_simulations
     original_derive = coordinator.execute_derivation_task
 
     def simulate(spec, *args, **kwargs):
+        if spec["data"]["params"]["noise_std"] == 0.2 and not any(
+            kind == "simulation" and value == 0.2 for kind, value in events
+        ):
+            assert not list(
+                (tmp_path / "output" / "analysis" / "cache" / "metrics").glob("*/result.npz")
+            )
         events.append(("simulation", spec["data"]["params"]["noise_std"]))
         return original_run(spec, *args, **kwargs)
 
