@@ -644,8 +644,10 @@ per-run `run.log` and `failure.json`; Discord remains independent.
 `display.timezone` selects an installed IANA timezone such as `Europe/Rome`;
 `ews run ... --timezone Europe/Rome` overrides YAML. The default is `UTC`, with
 no environment override. Finish estimates include an explicit zone, for example
-`Finish ~13:08 CEST`, and invalid names fail clearly. This affects terminal
-display only: persisted timestamps remain UTC, and scientific identities,
+`Finish ~13:08 CEST`. Estimates more than 24 elapsed hours away also include the
+date, for example `Finish ~2026-07-03 13:08 CEST`. Estimates up to 24 hours away
+show only the time and zone, even across midnight. Invalid names fail clearly.
+This affects terminal display only: persisted timestamps remain UTC, and scientific identities,
 compatibility, RNGs, and cache keys are unchanged.
 
 Progress uses `step / budget.steps` for online/RL work. Offline fits and trials

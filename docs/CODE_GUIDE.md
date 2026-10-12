@@ -210,6 +210,8 @@ thread refreshes Rich or plain stderr while scientific work proceeds. Inspect
 `WorkerProgress.eta` and `TerminalProgress.remaining` for attempt-aware and global
 estimates. Pending derived work keeps the global ETA indeterminate; the display
 instead labels its simulation-only estimate and notes that analysis is pending.
+`TerminalProgress._finish_estimate` includes the selected timezone and adds the
+date when more than 24 elapsed hours remain.
 This observer is independent of Discord and durable compute reporting.
 
 ### 3. Execute one complete interaction step

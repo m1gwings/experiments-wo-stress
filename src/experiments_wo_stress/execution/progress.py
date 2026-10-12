@@ -442,7 +442,8 @@ class TerminalProgress:
         if remaining is None:
             return "estimating…"
         finish = datetime.now(datetime_timezone.utc) + timedelta(seconds=remaining)
-        return finish.astimezone(self.timezone).strftime("~%H:%M %Z")
+        format_string = "~%Y-%m-%d %H:%M %Z" if remaining > 24 * 60 * 60 else "~%H:%M %Z"
+        return finish.astimezone(self.timezone).strftime(format_string)
 
     def render(self, now: float) -> Group:
         """Build a width-aware view of worker rows and study counters."""

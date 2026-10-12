@@ -251,8 +251,11 @@ keeps simulation outcomes and derived-task counts separate.
 `display.timezone` selects an installed IANA timezone, such as `Europe/Rome`.
 `ews run ... --timezone Europe/Rome` overrides YAML; otherwise YAML applies,
 with `UTC` as the default. There is no environment override. Finish estimates
-always include a timezone, for example `Finish ~13:08 CEST`. Invalid names fail
-clearly. This display choice never changes persisted UTC timestamps, scientific
+always include a timezone, for example `Finish ~13:08 CEST`. Estimates up to 24
+hours away show only the time and zone; later estimates include the date, for
+example `Finish ~2026-07-03 13:08 CEST`. The threshold uses elapsed hours even
+across midnight or daylight-saving changes. Invalid names fail clearly.
+This display choice never changes persisted UTC timestamps, scientific
 identities, random streams, compatibility, or cache reuse.
 
 Progress uses the protocol's completed `step` and requested `budget.steps`.

@@ -327,3 +327,41 @@ class TerminalProgressTests(unittest.TestCase):
                     self.assertEqual(self.display._finish_estimate(remaining), expected)
                     wall_clock.now.assert_called_once_with(timezone.utc)
         self.assertEqual(self.display._finish_estimate(None), "estimating…")
+
+    def test_finish_estimates_include_date_only_beyond_24_hours(self):
+        """Use elapsed hours across midnight, year boundaries, and daylight-saving changes."""
+        cases = (
+            ("UTC", datetime(2026, 7, 1, 23, 50, tzinfo=timezone.utc), 1200, "~00:10 UTC"),
+            ("UTC", datetime(2026, 7, 1, 11, 8, tzinfo=timezone.utc), 86399, "~11:07 UTC"),
+            ("UTC", datetime(2026, 7, 1, 11, 8, tzinfo=timezone.utc), 86400, "~11:08 UTC"),
+            (
+                "UTC",
+                datetime(2026, 7, 1, 11, 8, tzinfo=timezone.utc),
+                86401,
+                "~2026-07-02 11:08 UTC",
+            ),
+            (
+                "Europe/Rome",
+                datetime(2026, 12, 30, 23, 8, tzinfo=timezone.utc),
+                2 * 86400,
+                "~2027-01-02 00:08 CET",
+            ),
+            (
+                "Europe/Rome",
+                datetime(2026, 3, 28, 11, 8, tzinfo=timezone.utc),
+                86400,
+                "~13:08 CEST",
+            ),
+            (
+                "Europe/Rome",
+                datetime(2026, 10, 24, 11, 8, tzinfo=timezone.utc),
+                86401,
+                "~2026-10-25 12:08 CET",
+            ),
+        )
+        for name, now, remaining, expected in cases:
+            with self.subTest(timezone=name, now=now, remaining=remaining):
+                self.display.timezone = ZoneInfo(name)
+                with patch("experiments_wo_stress.execution.progress.datetime") as wall_clock:
+                    wall_clock.now.return_value = now
+                    self.assertEqual(self.display._finish_estimate(remaining), expected)

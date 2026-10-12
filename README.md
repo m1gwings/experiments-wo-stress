@@ -138,7 +138,8 @@ The combined `analysis/<metric>.csv` is exported at the end of an invocation;
 partitioned figures can appear while other groups are still running.
 `keep` is the default. Select terminal wall-clock display with
 `display.timezone: Europe/Rome` or `ews run ... --timezone Europe/Rome`; every
-finish estimate includes its timezone, defaulting to UTC.
+finish estimate includes its timezone, defaulting to UTC. Estimates up to 24 hours
+away show the time; later estimates also show the date (`YYYY-MM-DD`).
 
 `count-runs` validates configuration and returns only the study name and run count, here
 `{"name": "gaussian_bandit_comparison", "runs": 120}`. Counts combine grid

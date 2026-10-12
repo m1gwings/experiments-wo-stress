@@ -105,7 +105,8 @@ The CLI owns `TerminalProgress`, whose single parent-side display thread drains
 snapshots and updates Rich or periodic plain stderr lines. This also refreshes
 elapsed time while a sequential fit blocks inside one operation. Rows show task kind, subject, elapsed time, and defensible progress/ETA. They are
 keyed by process ID and replaced on worker reuse. Wall-clock finish estimates
-always include the selected IANA timezone; UTC remains the timestamp standard
+always include the selected IANA timezone and add the date (`YYYY-MM-DD`) when
+more than 24 elapsed hours remain; UTC remains the timestamp standard
 for persisted records. The context closes the display and
 queue on success, failure, or interruption; workers never render. Notifications
 continue to use their independent sparse sender and durable checkpoint readings.
