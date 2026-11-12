@@ -1,5 +1,13 @@
 # Build a paper experiment with Experiments W/O Stress
 
+The CLI commands `run`, `analyze`, and `plot` default to
+`output/<study_name>/`, using the YAML `name` and the current working directory.
+Use `--output DIR` to select a different experiment root. Each study owns its
+entire directory: keep paper PDFs alongside study folders in `output/`, and
+LaTeX build files in `output/.latex/`, never inside a study folder.
+`ews clean output/<study_name> --scope all --yes` affects only that study.
+Keep `/output/` ignored by Git. Existing explicit paths and saved layouts remain valid.
+
 This file is self-contained. Give it to an LLM together with a paper PDF and ask
 it to implement an experiment in a **separate research repository**. The library
 provides execution and artifact infrastructure; the research repository contains
@@ -56,7 +64,7 @@ paper-study/
     data.py                  custom generators/adapters when needed
     metrics.py               paper metrics, independent of simulation modules
   verify.py                  repeatability and recovery checks
-  outputs/                   generated artifacts, excluded from Git
+  output/                   generated artifacts, excluded from Git
 ```
 
 Keep `experiment_code/` beside the YAML file, or install the research package.
@@ -205,7 +213,7 @@ analysis:
 Run from the research repository:
 
 ```bash
-ews run experiment.yml --output outputs/study --workers 2
+ews run experiment.yml --output output/study --workers 2
 ```
 
 `run` executes the study and its configured analysis and figures as their own
@@ -624,7 +632,7 @@ with `group`, `repetition`, `algorithm_name`, `algorithm`, `data`, `protocol`,
 ## Run, reuse, inspect, and clean
 
 ```bash
-ews run experiment.yml --output outputs/study --workers 2
+ews run experiment.yml --output output/study --workers 2
 ```
 
 `run` automatically shows a Rich dashboard on interactive stderr, with one row
@@ -703,11 +711,11 @@ operations as needed:
 
 | Command | Use |
 | --- | --- |
-| `ews analyze experiment.yml --output outputs/study` | Recompute or reuse metrics and summaries. |
-| `ews plot experiment.yml --output outputs/study` | Regenerate figures from saved data. |
-| `ews inspect outputs/study` | Read saved status and validate completed artifacts. |
-| `ews clean outputs/study --scope inactive` | Preview cleanup of inactive variants. |
-| `ews clean outputs/study --scope settled` | Preview obsolete checkpoints from pruned runs; add `--yes` to remove them. |
+| `ews analyze experiment.yml --output output/study` | Recompute or reuse metrics and summaries. |
+| `ews plot experiment.yml --output output/study` | Regenerate figures from saved data. |
+| `ews inspect output/study` | Read saved status and validate completed artifacts. |
+| `ews clean output/study --scope inactive` | Preview cleanup of inactive variants. |
+| `ews clean output/study --scope settled` | Preview obsolete checkpoints from pruned runs; add `--yes` to remove them. |
 
 The six public commands are `count-runs`, `run`, `analyze`, `plot`, `inspect`, and
 `clean`. The optional `ews count-runs experiment.yml` validates configuration and
@@ -815,9 +823,9 @@ from experiments_wo_stress.storage import (
     validate_snapshot,
 )
 
-snapshot = create_snapshot("outputs/study", "snapshots/study-001")
+snapshot = create_snapshot("output/study", "snapshots/study-001")
 manifest = validate_snapshot(snapshot)
-restore_snapshot(snapshot, "outputs/restored-study")
+restore_snapshot(snapshot, "output/restored-study")
 ```
 
 `create_snapshot` holds experiment ownership and copies only committed retained

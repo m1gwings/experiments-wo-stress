@@ -53,11 +53,11 @@ the documentation check; executable example edits need focused execution tests.
 For an end-to-end acceptance run, use a fresh output directory:
 
 ```bash
-ews run examples/sequential_study/experiment.yml --output outputs/verification --max-steps 250
-ews inspect outputs/verification
-ews run examples/sequential_study/experiment.yml --output outputs/verification --workers 2
-ews run examples/sequential_study/experiment.yml --output outputs/verification
-ews run examples/offline_csv/experiment.yml --output outputs/offline-verification
+ews run examples/sequential_study/experiment.yml --output output/verification --max-steps 250
+ews inspect output/verification
+ews run examples/sequential_study/experiment.yml --output output/verification --workers 2
+ews run examples/sequential_study/experiment.yml --output output/verification
+ews run examples/offline_csv/experiment.yml --output output/offline-verification
 ```
 
 The paused run should resume with two workers and produce its configured

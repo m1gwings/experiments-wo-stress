@@ -21,6 +21,17 @@ meanings are the discovery contract; the locations below describe today's layout
 }
 ```
 
+The CLI commands `run`, `analyze`, and `plot` default to
+`output/<study_name>/`, using the YAML `name` and the current working directory.
+Use `--output DIR` to select a different experiment root. Each study owns its
+entire directory: keep paper PDFs alongside study folders in `output/`, and
+LaTeX build files in `output/.latex/`, never inside a study folder.
+`ews clean output/<study_name> --scope all --yes` affects only that study.
+Keep `/output/` ignored by Git. Existing explicit paths and saved layouts remain valid.
+
+The catalog paths below remain relative to each study root; cloud discovery and
+recovery formats are unchanged.
+
 ## Version 1 rules
 
 - `schema` is the exact identifier above; `schema_version` is integer `1`.

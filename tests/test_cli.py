@@ -197,6 +197,39 @@ class CommandLineTests(unittest.TestCase):
         self.assertNotIn("figures", first)
         self.assertFalse((output / "analysis").exists())
 
+    def test_default_study_directory_keeps_sibling_pdfs_and_build_files(self) -> None:
+        """Run, analyze, plot and clean a study alongside unrelated paper artifacts."""
+        self.short_study(analysis=self.analysis_settings(figures=True))
+        shared = self.root / "output"
+        shared.mkdir()
+        (shared / "main.pdf").write_bytes(b"paper PDF")
+        (shared / ".latex").mkdir()
+        (shared / ".latex/main.aux").write_text("compiler state")
+        env = dict(os.environ, PYTHONPATH=str(Path(__file__).resolve().parents[1] / "src"))
+
+        def invoke(*args: str) -> dict:
+            result = subprocess.run(
+                self.command(*args),
+                cwd=self.root,
+                env=env,
+                capture_output=True,
+                text=True,
+                timeout=30,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr + result.stdout)
+            return json.loads(result.stdout)
+
+        self.assertEqual(invoke("run", str(self.config))["completed"], 2)
+        self.assertEqual(invoke("run", str(self.config))["skipped"], 2)
+        self.assertEqual(invoke("analyze", str(self.config))["groups"], 1)
+        self.assertTrue(invoke("plot", str(self.config))["figures"])
+        study = shared / self.settings["name"]
+        self.assertEqual(invoke("inspect", str(study))["counts"]["completed"], 2)
+        invoke("clean", str(study), "--scope", "all", "--yes")
+        self.assertEqual((shared / "main.pdf").read_bytes(), b"paper PDF")
+        self.assertEqual((shared / ".latex/main.aux").read_text(), "compiler state")
+        self.assertEqual(set(shared.iterdir()), {shared / "main.pdf", shared / ".latex", study})
+
     def test_progress_stays_on_stderr_and_quiet_keeps_final_summary(self):
         """Redirected monitoring is plain text; stdout retains the existing JSON contract."""
         output = self.root / "progress"

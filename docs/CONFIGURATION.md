@@ -1,5 +1,13 @@
 # Configuration and extension guide
 
+The CLI commands `run`, `analyze`, and `plot` default to
+`output/<study_name>/`, using the YAML `name` and the current working directory.
+Use `--output DIR` to select a different experiment root. Each study owns its
+entire directory: keep paper PDFs alongside study folders in `output/`, and
+LaTeX build files in `output/.latex/`, never inside a study folder.
+`ews clean output/<study_name> --scope all --yes` affects only that study.
+Keep `/output/` ignored by Git. Existing explicit paths and saved layouts remain valid.
+
 Start with the [complete sequential configuration](../examples/sequential_study/experiment.yml).
 YAML describes a study; Python classes supply scientific behavior. Load a file with
 `load_config(path)` or an `ews` command. Classes are selected explicitly through
@@ -775,7 +783,7 @@ Custom figure options belong in `params`.
 ## Run, inspect, and clean
 
 ```bash
-ews run examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
+ews run examples/sequential_study/experiment.yml --output output/bandits --workers 2
 ```
 
 `run` executes or resumes the dependency pipeline and reuses compatible retained
@@ -811,11 +819,11 @@ The public commands are `count-runs`, `run`, `analyze`, `plot`, `inspect`, and
 
 | Command | Use |
 | --- | --- |
-| `ews analyze examples/sequential_study/experiment.yml --output outputs/bandits` | Update metrics and summary tables. |
-| `ews plot examples/sequential_study/experiment.yml --output outputs/bandits` | Update figures using saved results. |
-| `ews inspect outputs/bandits` | Read stored status and validate completed artifacts. |
-| `ews clean outputs/bandits --scope inactive` | Preview removal of inactive retained artifacts. |
-| `ews clean outputs/bandits --scope settled` | Preview obsolete checkpoints of proven pruned runs; add `--yes` to reclaim them. |
+| `ews analyze examples/sequential_study/experiment.yml --output output/bandits` | Update metrics and summary tables. |
+| `ews plot examples/sequential_study/experiment.yml --output output/bandits` | Update figures using saved results. |
+| `ews inspect output/bandits` | Read stored status and validate completed artifacts. |
+| `ews clean output/bandits --scope inactive` | Preview removal of inactive retained artifacts. |
+| `ews clean output/bandits --scope settled` | Preview obsolete checkpoints of proven pruned runs; add `--yes` to reclaim them. |
 
 Cleanup requires `--yes` to delete the previewed selection.
 

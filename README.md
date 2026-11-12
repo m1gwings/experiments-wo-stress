@@ -111,14 +111,14 @@ From the repository root, optionally check the run count, then run the study:
 ```bash
 # Optional: check the run count before launching.
 ews count-runs examples/sequential_study/experiment.yml
-ews run examples/sequential_study/experiment.yml --output outputs/bandits --workers 2
+ews run examples/sequential_study/experiment.yml --output output/bandits --workers 2
 ```
 
 `run` executes the requested dependency graph. Metrics run as trajectories finish,
 aggregates run when their repetitions are available, and figures run when their
 inputs are ready. A custom figure can set `partition_by` to aggregation labels so
 each independent plot runs as soon as its own groups finish. Independent simulations can continue meanwhile. Figures appear
-in `outputs/bandits/analysis/figures/`. Interrupted invocations retain valid
+in `output/bandits/analysis/figures/`. Interrupted invocations retain valid
 completed work for reuse.
 
 For storage-light studies, set `recording.retention: until_analyzed`. EWS removes
@@ -159,7 +159,7 @@ recording, budgets, and reuse in detail.
 To inspect saved status without running anything:
 
 ```bash
-ews inspect outputs/bandits
+ews inspect output/bandits
 ```
 
 The [offline CSV example](examples/offline_csv/README.md) uses a stored dataset
@@ -287,7 +287,7 @@ from experiments_wo_stress import load_config, run_experiment
 
 if __name__ == "__main__":
     config = load_config("examples/sequential_study/experiment.yml")
-    report = run_experiment(config, "outputs/bandits", workers=2)
+    report = run_experiment(config, "output/bandits", workers=2)
     print(report.to_dict())
 ```
 
@@ -315,6 +315,14 @@ the now unusable trajectory and checkpoints. Older outputs are read in place;
 snapshots omit checkpoints for proven pruned runs.
 
 ## Semantic artifact discovery
+
+The CLI commands `run`, `analyze`, and `plot` default to
+`output/<study_name>/`, using the YAML `name` and the current working directory.
+Use `--output DIR` to select a different experiment root. Each study owns its
+entire directory: keep paper PDFs alongside study folders in `output/`, and
+LaTeX build files in `output/.latex/`, never inside a study folder.
+`ews clean output/<study_name> --scope all --yes` affects only that study.
+Keep `/output/` ignored by Git. Existing explicit paths and saved layouts remain valid.
 
 EWS writes `OUTPUT/artifacts.json`, a versioned catalog of semantic roles such as
 `figures`, `analysis`, `compute_report`, `compute`, and `runs`. External tooling

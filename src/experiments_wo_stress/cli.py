@@ -95,7 +95,10 @@ def main(argv: list[str] | None = None) -> int:
         child.add_argument("config", type=Path, help="Experiment YAML file.")
         if command != "count-runs":
             child.add_argument(
-                "--output", "-o", type=Path, required=True, help="Artifact directory."
+                "--output",
+                "-o",
+                type=Path,
+                help="Artifact directory (default: output/<study name> relative to the working directory).",
             )
         if command == "run":
             child.add_argument(
@@ -155,6 +158,8 @@ def main(argv: list[str] | None = None) -> int:
                 result["compute_report"] = str(compute_path)
         else:
             config = load_config(args.config)
+            if args.command != "count-runs" and args.output is None:
+                args.output = Path("output") / config.name
             if args.command == "count-runs":
                 result = {"name": config.name, "runs": len(plan_runs(config))}
             elif args.command == "run":

@@ -35,12 +35,12 @@ From the repository root:
 
 ```bash
 python -m pip install -e '.[plot]'
-ews run examples/sequential_study/experiment.yml --output outputs/bandits
-ews inspect outputs/bandits
+ews run examples/sequential_study/experiment.yml --output output/bandits
+ews inspect output/bandits
 ```
 
 `run` executes the study and produces configured derivations as their inputs become
-available; figures appear under `outputs/bandits/analysis/figures/`. Running it
+available; figures appear under `output/bandits/analysis/figures/`. Running it
 again reuses compatible completed work. To preview the size first, the optional
 `ews count-runs examples/sequential_study/experiment.yml` reports 120 runs.
 You do not need to invoke `count-runs` before `run`.
@@ -52,8 +52,8 @@ summaries and errors. JSON reports remain on stdout.
 To see interruption and resumption, use a separate output directory:
 
 ```bash
-ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --max-steps 300
-ews run examples/sequential_study/experiment.yml --output outputs/resume-demo --workers 2
+ews run examples/sequential_study/experiment.yml --output output/resume-demo --max-steps 300
+ews run examples/sequential_study/experiment.yml --output output/resume-demo --workers 2
 ```
 
 The first command pauses each run after 300 steps. The second continues the runs
@@ -64,7 +64,7 @@ explains when a run can continue and how other changes affect reuse.
 After changing figure settings, regenerate figures without running simulations:
 
 ```bash
-ews plot examples/sequential_study/experiment.yml --output outputs/resume-demo
+ews plot examples/sequential_study/experiment.yml --output output/resume-demo
 ```
 
 Use `ews analyze` with the same configuration and output directory when changing
